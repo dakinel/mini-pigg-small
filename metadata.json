@@ -1,0 +1,6 @@
+{
+  "name": "Brass Belly: Coin Dash",
+  "description": "A steampunk balloon piggybank arcade mini-game where you catch falling coins, inflate your brass belly for score multipliers, jump over clockwork hazards, and bank your hoard before overpressure.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

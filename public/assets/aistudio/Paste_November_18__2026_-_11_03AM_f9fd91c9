@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Balloon Steampunk Piggybank Robot — Precision SVG Illustration</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #ffffff;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Subtle architectural grid option for inspection */
+    .bg-inspect-grid {
+      background-image:
+        linear-gradient(to right, rgba(0, 0, 0, 0.035) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(0, 0, 0, 0.035) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+
+    #stage {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      cursor: grab;
+    }
+
+    #stage:active {
+      cursor: grabbing;
+    }
+
+    #robot-svg {
+      width: min(92vw, 92vh);
+      height: min(92vw, 92vh);
+      max-width: 960px;
+      max-height: 960px;
+      transition: transform 0.12s ease-out;
+      will-change: transform;
+    }
+
+    /* Lite mode: drops the heavy procedural texture filters (auto-enabled on slow devices) */
+    body.lite [filter] {
+      filter: none !important;
+    }
+
+    #robot-svg *:not(#ground-line) {
+      stroke-linejoin: round;
+      stroke-linecap: round;
+    }
+
+    #controls button {
+      touch-action: none;
+    }
+
+    #controls button.on {
+      background: #171717;
+      color: #fff;
+    }
+  </style>
+</head>
+
+<body class="bg-white text-neutral-800">
+
+  <!-- Main Interactive Viewport -->
+  <main id="stage" aria-label="Steampunk Piggybank Robot Canvas">
+    <!--
+      High-Precision Multi-Layered Vector Illustration
+      ViewBox: 1000 x 1000 matching the proportions of watermarked_img_5366581703950316686.jpg
+    -->
+    <svg id="robot-svg" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <!-- ============================================================
+             1. PROCEDURAL PATINA & BRUSHED METAL FILTERS
+             ============================================================ -->
+        <!-- Subtle brushed grain & weathered patina overlay -->
+        <filter id="metal-patina" x="-5%" y="-5%" width="110%" height="110%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.035 0.055" numOctaves="4" seed="14" result="noise" />
+          <feColorMatrix type="matrix" values="
+            0.35 0    0    0 0.25
+            0    0.28 0    0 0.18
+            0    0    0.18 0 0.08
+            0    0    0    0.16 0" in="noise" result="tintedNoise" />
+          <feComposite operator="in" in="tintedNoise" in2="SourceGraphic" result="clippedNoise" />
+          <feBlend mode="multiply" in="SourceGraphic" in2="clippedNoise" />
+        </filter>
+
+        <!-- Fine copper hammered/oxidized texture for lower belly -->
+        <filter id="copper-texture" x="-5%" y="-5%" width="110%" height="110%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.065" numOctaves="5" seed="42" result="rawNoise" />
+          <feColorMatrix type="matrix" values="
+            0.40 0    0    0 0.15
+            0    0.30 0    0 0.10
+            0    0    0.16 0 0.04
+            0    0    0    0.24 0" in="rawNoise" result="copperNoise" />
+          <feComposite operator="in" in="copperNoise" in2="SourceGraphic" result="maskedNoise" />
+          <feBlend mode="multiply" in="SourceGraphic" in2="maskedNoise" />
+        </filter>
+
+        <!-- Soft realistic ambient occlusion / drop shadow -->
+        <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur" />
+          <feOffset dx="3" dy="7" result="offsetBlur" />
+          <feComponentTransfer in="offsetBlur" result="shadowAlpha">
+            <feFuncA type="linear" slope="0.45" />
+          </feComponentTransfer>
+          <feMerge>
+            <feMergeNode in="shadowAlpha" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+
+        <!-- Deep slot recessed shadow -->
+        <filter id="slot-recess" x="-15%" y="-15%" width="130%" height="130%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="blur" />
+          <feOffset dx="-2" dy="4" result="offset" />
+          <feComponentTransfer>
+            <feFuncA type="linear" slope="0.6" />
+          </feComponentTransfer>
+          <feMerge>
+            <feMergeNode />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+
+        <!-- Tail cast shadow onto copper belly -->
+        <filter id="tail-shadow" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="5.5" />
+          <feOffset dx="-6" dy="8" />
+          <feComponentTransfer>
+            <feFuncA type="linear" slope="0.52" />
+          </feComponentTransfer>
+        </filter>
+
+        <!-- ============================================================
+             2. METALLIC BRASS, BRONZE, COPPER & STEEL GRADIENTS
+             ============================================================ -->
+
+        <!-- Main Upper Torso Brushed Brass Shell -->
+        <linearGradient id="brass-body-main" x1="12%" y1="35%" x2="88%" y2="55%">
+          <stop offset="0%" stop-color="#76603f" />
+          <stop offset="17%" stop-color="#7b6441" />
+          <stop offset="33%" stop-color="#836b45" />
+          <stop offset="50%" stop-color="#876f47" />
+          <stop offset="67%" stop-color="#7f6842" />
+          <stop offset="83%" stop-color="#775f3e" />
+          <stop offset="100%" stop-color="#6f5938" />
+        </linearGradient>
+
+        <!-- Vertical Specular & Ambient Falloff on Brass Torso -->
+        <linearGradient id="brass-body-vertical" x1="40%" y1="0%" x2="55%" y2="100%">
+          <stop offset="0%" stop-color="#6a5533" stop-opacity="0.45" />
+          <stop offset="22%" stop-color="#7a633e" stop-opacity="0.06" />
+          <stop offset="65%" stop-color="#846a3f" stop-opacity="0.05" />
+          <stop offset="92%" stop-color="#4d3d24" stop-opacity="0.42" />
+          <stop offset="100%" stop-color="#322716" stop-opacity="0.65" />
+        </linearGradient>
+
+        <!-- Upper Chest Collar Plate (Below Head Dome) -->
+        <linearGradient id="collar-brass" x1="15%" y1="20%" x2="85%" y2="80%">
+          <stop offset="0%" stop-color="#6f5936" />
+          <stop offset="35%" stop-color="#765e39" />
+          <stop offset="62%" stop-color="#735c37" />
+          <stop offset="100%" stop-color="#6c5633" />
+        </linearGradient>
+
+        <!-- Lower Copper-Bronze Belly Hull -->
+        <linearGradient id="copper-belly-grad" x1="15%" y1="25%" x2="85%" y2="75%">
+          <stop offset="0%" stop-color="#46341f" />
+          <stop offset="20%" stop-color="#58402a" />
+          <stop offset="40%" stop-color="#684a2e" />
+          <stop offset="60%" stop-color="#5e442a" />
+          <stop offset="80%" stop-color="#4d3822" />
+          <stop offset="100%" stop-color="#3d2c1a" />
+        </linearGradient>
+
+        <!-- Bottom Golden-Bronze Rim Band -->
+        <linearGradient id="bottom-rim-grad" x1="10%" y1="30%" x2="90%" y2="70%">
+          <stop offset="0%" stop-color="#46341f" />
+          <stop offset="25%" stop-color="#745636" />
+          <stop offset="50%" stop-color="#8a6640" />
+          <stop offset="75%" stop-color="#68492f" />
+          <stop offset="100%" stop-color="#3b2a19" />
+        </linearGradient>
+
+        <!-- Underside Pelvis Bowl Shadow -->
+        <linearGradient id="pelvis-under-grad" x1="15%" y1="10%" x2="85%" y2="90%">
+          <stop offset="0%" stop-color="#30241a" />
+          <stop offset="33%" stop-color="#483425" />
+          <stop offset="67%" stop-color="#583f2a" />
+          <stop offset="100%" stop-color="#2c2017" />
+        </linearGradient>
+
+        <!-- Steel-Bronze Head Dome -->
+        <radialGradient id="head-dome-grad" cx="42%" cy="32%" r="65%">
+          <stop offset="0%" stop-color="#816942" />
+          <stop offset="32%" stop-color="#78623f" />
+          <stop offset="68%" stop-color="#725d3b" />
+          <stop offset="100%" stop-color="#6c5838" />
+        </radialGradient>
+
+        <!-- Ear Bronze Metallic Gradient -->
+        <linearGradient id="ear-bronze-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#735f3f" />
+          <stop offset="40%" stop-color="#6e5a3b" />
+          <stop offset="78%" stop-color="#695638" />
+          <stop offset="100%" stop-color="#655335" />
+        </linearGradient>
+
+        <!-- Ear Dark Underside Fold -->
+        <linearGradient id="ear-inner-grad" x1="0%" y1="0%" x2="100%" y2="80%">
+          <stop offset="0%" stop-color="#453925" />
+          <stop offset="55%" stop-color="#50422b" />
+          <stop offset="100%" stop-color="#403522" />
+        </linearGradient>
+
+        <!-- Cylindrical Arm Segment Brass Gradient (angled perpendicular to left arm) -->
+        <linearGradient id="arm-left-cyl" x1="25%" y1="15%" x2="78%" y2="85%">
+          <stop offset="0%" stop-color="#493424" />
+          <stop offset="25%" stop-color="#7d5b3d" />
+          <stop offset="50%" stop-color="#8d6746" />
+          <stop offset="75%" stop-color="#654733" />
+          <stop offset="100%" stop-color="#38281b" />
+        </linearGradient>
+
+        <!-- Cylindrical Arm Segment Brass Gradient (angled perpendicular to right arm) -->
+        <linearGradient id="arm-right-cyl" x1="35%" y1="5%" x2="65%" y2="95%">
+          <stop offset="0%" stop-color="#4f3828" />
+          <stop offset="25%" stop-color="#826041" />
+          <stop offset="50%" stop-color="#926c4a" />
+          <stop offset="75%" stop-color="#684a35" />
+          <stop offset="100%" stop-color="#3b2b1d" />
+        </linearGradient>
+
+        <!-- Bulbous Fist/Cap Dark Antique Bronze -->
+        <radialGradient id="fist-cap-grad" cx="38%" cy="32%" r="65%">
+          <stop offset="0%" stop-color="#76826f" />
+          <stop offset="33%" stop-color="#58655b" />
+          <stop offset="67%" stop-color="#3b463f" />
+          <stop offset="100%" stop-color="#232b26" />
+        </radialGradient>
+
+        <!-- Coin Slot Bevel Frame Gradient -->
+        <linearGradient id="slot-bevel-outer" x1="0%" y1="15%" x2="100%" y2="85%">
+          <stop offset="0%" stop-color="#566052" />
+          <stop offset="25%" stop-color="#7a846f" />
+          <stop offset="50%" stop-color="#434c41" />
+          <stop offset="75%" stop-color="#2f362e" />
+          <stop offset="100%" stop-color="#66705e" />
+        </linearGradient>
+
+        <!-- Coin Slot Inner Wall Thickness (Left & Bottom inner bevel edge) -->
+        <linearGradient id="slot-inner-wall" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#2a2a21" />
+          <stop offset="50%" stop-color="#454a3b" />
+          <stop offset="100%" stop-color="#68705b" />
+        </linearGradient>
+
+        <!-- Deep Coin Slot Cavity -->
+        <linearGradient id="slot-void-grad" x1="15%" y1="0%" x2="85%" y2="100%">
+          <stop offset="0%" stop-color="#090705" />
+          <stop offset="45%" stop-color="#14100c" />
+          <stop offset="85%" stop-color="#2c2418" />
+          <stop offset="100%" stop-color="#0b0907" />
+        </linearGradient>
+
+        <!-- Curly Silver-Steel & Bronze Spring Tail -->
+        <linearGradient id="tail-steel-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#9aa593" />
+          <stop offset="33%" stop-color="#707d6f" />
+          <stop offset="67%" stop-color="#4b574f" />
+          <stop offset="100%" stop-color="#2c342f" />
+        </linearGradient>
+
+        <!-- Leg & Boot Bronze Gradient -->
+        <linearGradient id="leg-bronze-grad" x1="10%" y1="20%" x2="90%" y2="80%">
+          <stop offset="0%" stop-color="#3c2e20" />
+          <stop offset="25%" stop-color="#55432f" />
+          <stop offset="50%" stop-color="#665038" />
+          <stop offset="75%" stop-color="#463726" />
+          <stop offset="100%" stop-color="#291f15" />
+        </linearGradient>
+
+        <!-- Jet flame -->
+        <linearGradient id="fl-outer" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#e8a24a" stop-opacity=".95" />
+          <stop offset=".45" stop-color="#d9722c" stop-opacity=".85" />
+          <stop offset="1" stop-color="#b8402a" stop-opacity="0" />
+        </linearGradient>
+        <linearGradient id="fl-mid" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#f7dc7a" stop-opacity="1" />
+          <stop offset=".5" stop-color="#f0a53c" stop-opacity=".9" />
+          <stop offset="1" stop-color="#e0702b" stop-opacity="0" />
+        </linearGradient>
+        <linearGradient id="fl-core" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#fffbe9" stop-opacity="1" />
+          <stop offset=".6" stop-color="#ffe9a6" stop-opacity=".85" />
+          <stop offset="1" stop-color="#f7dc7a" stop-opacity="0" />
+        </linearGradient>
+        <radialGradient id="fl-glow">
+          <stop offset="0" stop-color="#ffb347" stop-opacity=".55" />
+          <stop offset="1" stop-color="#ffb347" stop-opacity="0" />
+        </radialGradient>
+        <!-- Rivet Radial Gradient -->
+        <radialGradient id="rivet-grad" cx="35%" cy="30%" r="65%">
+          <stop offset="0%" stop-color="#8e703f" />
+          <stop offset="50%" stop-color="#715b36" />
+          <stop offset="100%" stop-color="#46371f" />
+        </radialGradient>
+
+        <!-- Clip paths for clean layered shading -->
+        <clipPath id="clip-upper-torso">
+          <path
+            d="M 326.0 244.0 C 365.0 206.0 462.0 174.0 540.0 165.0 C 612.0 192.0 695.0 310.0 774.0 494.0 C 695.0 492.0 608.0 525.0 535.0 588.0 C 468.0 646.0 405.0 696.0 354.0 714.0 C 315.0 585.0 294.0 422.0 326.0 244.0 Z"
+            data-o="M 326.0 244.0 C 365.0 206.0 462.0 174.0 540.0 165.0 C 612.0 192.0 695.0 310.0 774.0 494.0 C 695.0 492.0 608.0 525.0 535.0 588.0 C 468.0 646.0 405.0 696.0 354.0 714.0 C 315.0 585.0 294.0 422.0 326.0 244.0 Z" />
+        </clipPath>
+
+        <clipPath id="clip-lower-belly">
+          <path
+            d="M 358.0 722.0 C 412.0 706.0 474.0 654.0 542.0 595.0 C 614.0 532.0 698.0 498.0 776.0 502.0 C 788.0 538.0 795.0 572.0 794.0 602.0 C 738.0 662.0 636.0 720.0 520.0 742.0 C 438.0 757.0 382.0 746.0 358.0 722.0 Z"
+            data-o="M 358.0 722.0 C 412.0 706.0 474.0 654.0 542.0 595.0 C 614.0 532.0 698.0 498.0 776.0 502.0 C 788.0 538.0 795.0 572.0 794.0 602.0 C 738.0 662.0 636.0 720.0 520.0 742.0 C 438.0 757.0 382.0 746.0 358.0 722.0 Z" />
+        </clipPath>
+      </defs>
+
+      <g id="cam">
+        <!-- ==============================================================
+           LAYER 0: GROUND CONTACT SHADOW (Subtle soft grounding)
+           ============================================================== -->
+        <ellipse id="ground-shadow" cx="560" cy="916" rx="150" ry="10" fill="rgba(45,35,25,0.10)" />
+        <line x1="-3000" x2="4000" y1="918" y2="918" stroke="#d8d0c5" stroke-width="2" />
+        <line id="ground-line" x1="-3000" x2="4000" y1="932" y2="932" stroke="#d1bea3" stroke-width="4"
+          stroke-dasharray="46 30" stroke-linecap="round" />
+
+        <g id="actor">
+          <g id="legs-group"></g>
+          <g id="body">
+            <!-- ==============================================================
+           LAYER 2: VIEWER'S RIGHT ARM (Raised Upward/Outward)
+           ============================================================== -->
+            <!-- Dark Shoulder Socket Shadow (static: stays fixed on the body) -->
+            <g id="right-socket-g"><ellipse cx="642" cy="235" rx="36" ry="52" transform="rotate(-26 642 235)" fill="#2c1e14" /></g>
+            <g id="right-arm-group">
+
+              <!-- Segment 1: Upper Arm Bellows Ring -->
+              <path
+                d="M 608.0 164.0 C 634.0 152.0 662.0 142.0 686.0 135.0 C 708.0 164.0 720.0 198.0 716.0 232.0 C 692.0 242.0 666.0 250.0 642.0 254.0 C 635.0 222.0 622.0 190.0 608.0 164.0 Z"
+                fill="url(#arm-right-cyl)" filter="url(#metal-patina)" stroke="#402c1e" stroke-width="1.5" />
+              <!-- Highlight rim on Segment 1 -->
+              <path d="M 614 166 C 638 155, 662 146, 683 140" fill="none" stroke="#966747" stroke-width="2.5"
+                opacity="0.10" />
+
+              <!-- Joint Groove 1 -->
+              <path
+                d="M 686.0 135.0 C 708.0 164.0 720.0 198.0 716.0 232.0 C 718.9 231.7 721.6 230.7 724.0 229.0 C 728.0 195.0 716.0 161.0 694.0 133.0 C 691.2 132.9 688.5 133.6 686.0 135.0 Z"
+                fill="#322217" />
+
+              <!-- Segment 2: Forearm Ring -->
+              <path
+                d="M 694.0 133.0 C 708.0 128.0 722.0 125.0 734.0 123.0 C 752.0 152.0 761.0 186.0 757.0 219.0 C 745.0 223.0 734.0 226.0 723.0 229.0 C 727.0 195.0 716.0 161.0 694.0 133.0 Z"
+                fill="url(#arm-right-cyl)" filter="url(#metal-patina)" stroke="#402c1e" stroke-width="1.5" />
+              <!-- Specular band on Segment 2 -->
+              <path d="M 702 156 C 716 152, 730 149, 742 148" fill="none" stroke="#996848" stroke-width="4"
+                opacity="0.08" />
+
+              <!-- Joint Groove 2 (Dark Cuff Seam) -->
+              <path
+                d="M 733.0 122.0 C 751.0 151.0 760.0 185.0 756.0 219.0 C 758.8 219.1 761.5 218.4 764.0 217.0 C 768.0 183.0 759.0 149.0 741.0 120.0 C 738.2 119.9 735.5 120.6 733.0 122.0 Z"
+                fill="#2e2016" />
+
+              <!-- Segment 3: Bulbous Dome Cap (No Hand) -->
+              <path
+                d="M 741.0 120.0 C 778.0 112.0 812.0 132.0 816.0 165.0 C 820.0 198.0 796.0 221.0 764.0 217.0 C 768.0 183.0 759.0 149.0 741.0 120.0 Z"
+                fill="url(#fist-cap-grad)" filter="url(#metal-patina)" stroke="#3a271b" stroke-width="1.5" />
+              <!-- Dome Rim Highlight -->
+              <path d="M 746 125 C 762 152, 770 182, 766 212" fill="none" stroke="#895d40" stroke-width="2.5"
+                opacity="0.10" />
+            </g>
+
+            <!-- ==============================================================
+           LAYER 3: MAIN BARREL TORSO (PELVIS, BELLY & BRASS BREASTPLATE)
+           ============================================================== -->
+            <g id="torso-main">
+              <!-- 3A. Bottom Rounded Pelvis Underside Bowl -->
+              <path
+                d="M 358.0 725.0 C 430.0 755.0 575.0 745.0 680.0 692.0 C 738.0 662.0 780.0 628.0 798.0 598.0 C 806.0 625.0 798.0 662.0 768.0 696.0 C 712.0 758.0 608.0 796.0 496.0 794.0 C 418.0 792.0 368.0 765.0 358.0 725.0 Z"
+                data-o="M 358.0 725.0 C 430.0 755.0 575.0 745.0 680.0 692.0 C 738.0 662.0 780.0 628.0 798.0 598.0 C 806.0 625.0 798.0 662.0 768.0 696.0 C 712.0 758.0 608.0 796.0 496.0 794.0 C 418.0 792.0 368.0 765.0 358.0 725.0 Z"
+                fill="url(#pelvis-under-grad)" filter="url(#metal-patina)" stroke="#3d311d" stroke-width="1.5" />
+
+              <!-- 3B. Thick Golden-Bronze Bottom Rim Band -->
+              <path
+                d="M 354.0 714.0 C 425.0 746.0 568.0 738.0 678.0 682.0 C 738.0 652.0 780.0 616.0 798.0 584.0 C 801.6 590.9 803.3 598.2 803.0 606.0 C 782.0 642.0 738.0 678.0 676.0 709.0 C 566.0 764.0 424.0 770.0 356.0 736.0 C 353.4 728.8 352.7 721.5 354.0 714.0 Z"
+                data-o="M 354.0 714.0 C 425.0 746.0 568.0 738.0 678.0 682.0 C 738.0 652.0 780.0 616.0 798.0 584.0 C 801.6 590.9 803.3 598.2 803.0 606.0 C 782.0 642.0 738.0 678.0 676.0 709.0 C 566.0 764.0 424.0 770.0 356.0 736.0 C 353.4 728.8 352.7 721.5 354.0 714.0 Z"
+                fill="url(#bottom-rim-grad)" stroke="#41341f" stroke-width="1.4" />
+              <!-- Rim Top Specular Edge -->
+              <path d="M 360 718 C 430 748, 570 740, 678 685 C 736 655, 776 622, 795 591"
+                data-o="M 360 718 C 430 748, 570 740, 678 685 C 736 655, 776 622, 795 591" fill="none" stroke="#927341"
+                stroke-width="2.2" opacity="0.11" />
+
+              <!-- 3C. Lower Weathered Copper-Bronze Belly Hull -->
+              <g clip-path="url(#clip-lower-belly)">
+                <rect x="150" y="400" width="800" height="600" fill="url(#copper-belly-grad)"
+                  filter="url(#copper-texture)" />
+                <!-- Subtle ambient occlusion under the upper brass lip -->
+                <path
+                  d="M 352.0 715.0 C 408.0 698.0 472.0 645.0 540.0 586.0 C 612.0 524.0 696.0 490.0 778.0 494.0 C 783.0 503.4 785.4 513.4 785.0 524.0 C 702.0 520.0 622.0 554.0 550.0 614.0 C 482.0 672.0 418.0 722.0 362.0 738.0 C 356.6 731.2 353.3 723.6 352.0 715.0 Z"
+                  data-o="M 352.0 715.0 C 408.0 698.0 472.0 645.0 540.0 586.0 C 612.0 524.0 696.0 490.0 778.0 494.0 C 783.0 503.4 785.4 513.4 785.0 524.0 C 702.0 520.0 622.0 554.0 550.0 614.0 C 482.0 672.0 418.0 722.0 362.0 738.0 C 356.6 731.2 353.3 723.6 352.0 715.0 Z"
+                  fill="#2b2214" opacity="0.58" />
+                <!-- Warm copper highlight patch on belly -->
+                <ellipse data-e="595 635 95 52 -24" cx="595" cy="635" rx="95" ry="52" transform="rotate(-24 595 635)"
+                  fill="#7e663f" opacity="0.22" />
+              </g>
+
+              <!-- 3D. Upper Brass Breastplate Shell -->
+              <g clip-path="url(#clip-upper-torso)">
+                <!-- Base Metallic Gradient + Brushed Patina -->
+                <rect x="150" y="150" width="800" height="800" fill="url(#brass-body-main)"
+                  filter="url(#metal-patina)" />
+                <!-- Vertical Specular & Shadow Overlay -->
+                <rect x="150" y="150" width="800" height="800" fill="url(#brass-body-vertical)" />
+                <!-- Soft Warm Key-Light Glow on Left-Center Chest -->
+                <ellipse data-e="445 435 115 165 -18" cx="445" cy="435" rx="115" ry="165"
+                  transform="rotate(-18 445 435)" fill="#a5824a" opacity="0.04" />
+                <!-- Subtle Rim Reflection on Far Right Edge -->
+                <path d="M 650 220 C 705 305, 745 400, 772 492" data-o="M 650 220 C 705 305, 745 400, 772 492"
+                  fill="none" stroke="#967643" stroke-width="10" opacity="0.04" />
+              </g>
+
+              <!-- 3E. Thick Dark-Bronze Bottom Trim Lip of Upper Breastplate -->
+              <path
+                d="M 352.0 712.0 C 406.0 694.0 468.0 644.0 536.0 585.0 C 608.0 522.0 694.0 488.0 775.0 492.0 C 778.1 496.9 779.8 502.2 780.0 508.0 C 698.0 504.0 614.0 538.0 542.0 600.0 C 474.0 658.0 412.0 708.0 358.0 725.0 C 354.8 721.2 352.8 716.9 352.0 712.0 Z"
+                data-o="M 352.0 712.0 C 406.0 694.0 468.0 644.0 536.0 585.0 C 608.0 522.0 694.0 488.0 775.0 492.0 C 778.1 496.9 779.8 502.2 780.0 508.0 C 698.0 504.0 614.0 538.0 542.0 600.0 C 474.0 658.0 412.0 708.0 358.0 725.0 C 354.8 721.2 352.8 716.9 352.0 712.0 Z"
+                fill="#645237" stroke="#342b1c" stroke-width="1.5" />
+              <!-- Bevel Highlight along Upper Edge of the Trim Lip -->
+              <path d="M 356 713 C 410 695, 472 645, 540 586 C 612 524, 696 490, 775 494"
+                data-o="M 356 713 C 410 695, 472 645, 540 586 C 612 524, 696 490, 775 494" fill="none" stroke="#866e46"
+                stroke-width="2.5" opacity="0.12" />
+
+              <!-- 3F. Upper Right Shoulder Pauldron / Layered Plate -->
+              <g id="right-pauldron">
+                <path
+                  d="M 550.6 166.0 C 560.7 160.1 571.7 157.4 583.4 158.0 C 599.8 154.0 613.8 162.2 625.4 182.6 C 637.2 193.9 644.9 207.5 648.6 223.4 C 660.2 243.8 659.8 256.2 647.4 260.6 C 640.0 266.0 631.7 268.9 622.6 269.4 C 610.2 273.8 596.2 265.6 580.6 244.8 C 566.0 234.1 555.6 220.2 549.4 203.2 C 533.8 182.4 534.2 170.0 550.6 166.0 Z"
+                  fill="url(#collar-brass)" filter="url(#metal-patina)" stroke="#412d1f" stroke-width="1.5" />
+                <!-- Inner stepped plate detail -->
+                <path
+                  d="M 577.6 169.8 C 584.0 165.9 590.9 164.0 598.4 164.2 C 608.8 161.4 618.0 168.0 626.0 184.0 C 634.5 193.1 639.9 203.7 642.0 216.0 C 650.0 232.0 649.2 241.6 639.6 244.8 C 633.8 248.9 627.4 251.0 620.4 251.2 C 610.8 254.4 601.6 247.8 592.8 231.4 C 583.7 222.2 577.8 211.3 575.2 198.6 C 566.4 182.2 567.2 172.6 577.6 169.8 Z"
+                  fill="#6f4c34" opacity="0.55" />
+                <path d="M 530 174 C 562 204, 588 238, 605 274" fill="none" stroke="#8d6042" stroke-width="2"
+                  opacity="0.10" />
+              </g>
+
+              <!-- 3G. Upper Left Shoulder Pauldron / Layered Plate -->
+              <g id="left-pauldron">
+                <!-- Shadow cast onto brass torso -->
+                <path
+                  d="M 279.3 300.2 C 288.3 290.8 299.1 284.7 311.7 281.8 C 327.9 272.6 345.8 272.8 365.4 282.4 C 380.4 284.9 393.5 291.3 404.6 301.6 C 424.2 311.2 428.2 323.6 416.6 338.8 C 411.9 351.3 404.2 361.4 393.4 369.2 C 381.8 384.4 368.0 387.4 352.0 378.2 C 339.5 375.3 328.8 369.1 320.0 359.8 C 304.0 350.6 291.9 342.8 283.7 336.4 C 277.0 333.8 271.5 329.5 267.3 323.6 C 259.1 317.2 263.1 309.4 279.3 300.2 Z"
+                  fill="#332318" opacity="0.38" />
+                <!-- Main Rectangular Curved Pauldron Plate -->
+                <path
+                  d="M 274.4 294.4 C 284.1 283.9 295.8 277.0 309.6 273.6 C 327.2 263.2 345.8 263.2 365.4 273.6 C 380.5 276.6 393.6 283.5 404.6 294.4 C 424.2 304.8 428.2 317.6 416.6 332.8 C 411.9 345.3 404.2 355.4 393.4 363.2 C 381.8 378.4 366.6 380.4 347.8 369.2 C 333.0 365.5 320.5 358.0 310.2 346.8 C 291.4 335.6 278.6 328.0 271.8 324.0 C 266.5 322.7 261.9 320.0 258.2 316.0 C 251.4 312.0 256.8 304.8 274.4 294.4 Z"
+                  fill="url(#collar-brass)" filter="url(#metal-patina)" stroke="#402c1e" stroke-width="1.6" />
+                <!-- Stepped beveled bronze trim border on left pauldron -->
+                <!-- Top highlight on pauldron -->
+                <path d="M 254 309 C 282 286, 310 270, 336 261" fill="none" stroke="#926344" stroke-width="2.2"
+                  opacity="0.11" />
+              </g>
+            </g>
+
+            <!-- ==============================================================
+           LAYER 4: ENLARGED VERTICAL PIGGYBANK COIN SLOT
+           (Precisely matched to watermarked_img_5366581703950316686.jpg)
+           ============================================================== -->
+            <g id="slot-follow">
+              <g id="coin-slot-assembly"
+                transform="translate(-28 75) translate(575 372) scale(1.45) translate(-575 -372)">
+                <!-- Soft drop shadow cast by the raised slot bezel onto the brass chest -->
+                <path
+                  d="M 502.0 284.0 C 526.0 270.0 554.0 265.0 574.0 282.0 C 614.7 318.9 643.4 363.6 660.0 416.0 C 672.0 436.0 662.0 458.0 636.0 472.0 C 610.0 486.0 584.0 484.0 570.0 462.0 C 529.8 424.2 501.8 378.9 486.0 326.0 C 474.0 306.0 482.0 294.0 502.0 284.0 Z"
+                  fill="#2f2516" opacity="0.34" filter="url(#soft-shadow)" />
+
+                <!-- Outer Beveled Bronze Frame -->
+                <path
+                  d="M 505.0 280.0 C 529.0 266.0 557.0 262.0 577.0 280.0 C 617.4 317.0 645.7 361.7 662.0 414.0 C 674.0 434.0 664.0 456.0 638.0 470.0 C 612.0 484.0 586.0 482.0 572.0 460.0 C 531.8 422.2 503.8 376.9 488.0 324.0 C 476.0 304.0 485.0 292.0 505.0 280.0 Z"
+                  fill="url(#slot-bevel-outer)" stroke="#443723" stroke-width="1.8" />
+
+                <!-- Crisp Metallic Specular Rim Highlight on Frame -->
+                <path
+                  d="M 507.0 283.0 C 530.0 270.0 555.0 266.0 574.0 283.0 C 613.9 319.4 641.9 363.4 658.0 415.0 C 669.0 433.0 660.0 453.0 636.0 466.0 C 612.0 479.0 588.0 477.0 575.0 457.0 C 535.3 419.8 507.6 375.1 492.0 323.0 C 481.0 305.0 489.0 294.0 507.0 283.0 Z"
+                  fill="none" stroke="#937647" stroke-width="2.2" opacity="0.12" />
+
+                <!-- Inner Recessed Wall Thickness (Gives 3D depth to the large slot) -->
+                <path
+                  d="M 518.0 294.0 C 535.0 284.0 554.0 282.0 567.0 295.0 C 604.1 329.0 630.1 370.0 645.0 418.0 C 653.0 431.0 646.0 446.0 628.0 456.0 C 610.0 466.0 592.0 464.0 582.0 449.0 C 545.1 414.3 519.4 372.6 505.0 324.0 C 497.0 311.0 503.0 302.0 518.0 294.0 Z"
+                  fill="url(#slot-inner-wall)" stroke="#302718" stroke-width="1.5" />
+
+                <!-- Deep Wide Dark Coin Slot Opening -->
+                <path
+                  d="M 523.0 298.0 C 538.0 289.0 554.0 288.0 566.0 300.0 C 602.1 333.2 627.5 373.2 642.0 420.0 C 649.0 431.0 643.0 444.0 627.0 453.0 C 611.0 462.0 595.0 460.0 586.0 447.0 C 549.7 413.2 524.4 372.5 510.0 325.0 C 503.0 313.0 509.0 306.0 523.0 298.0 Z"
+                  fill="url(#slot-void-grad)" />
+
+                <!-- Subtle Inner Lip Catchlight on Right-Bottom Interior Edge -->
+                <path d="M 642 420 C 649 431, 643 444, 627 453 C 611 462, 595 460, 586 447" fill="none" stroke="#756140"
+                  stroke-width="1.8" opacity="0.75" />
+              </g>
+            </g>
+
+            <!-- ==============================================================
+           LAYER 5: HEAD DOME, RIVETED COLLAR & ARTICULATED PIG EARS
+           ============================================================== -->
+            <g id="head-and-ears">
+              <g id="right-ear"></g>
+              <g id="left-ear"></g>
+            </g>
+
+            <!-- ==============================================================
+           LAYER 6: VIEWER'S LEFT ARM (Foreground, Angled Down-Left)
+           ============================================================== -->
+            <!-- Dark Shoulder Socket Cavity (static: stays fixed on the body) -->
+            <path id="left-socket"
+              d="M 294.0 334.0 C 332.0 346.0 362.0 374.0 374.0 414.0 C 374.0 452.0 354.0 484.0 326.0 496.0 C 295.0 456.0 282.0 394.0 294.0 334.0 Z"
+              fill="#1a1108" />
+            <g id="left-arm-group">
+
+              <!-- Segment 1: Upper Arm Bellows Ring -->
+              <path
+                d="M 244.0 352.0 C 262.0 336.0 282.0 328.0 298.0 332.0 C 332.0 346.0 356.0 382.0 356.0 422.0 C 338.0 428.0 320.0 430.0 304.0 428.0 C 292.0 396.0 270.0 368.0 244.0 352.0 Z"
+                fill="url(#arm-left-cyl)" filter="url(#metal-patina)" stroke="#3d2a1d" stroke-width="1.5" />
+              <!-- Specular band on Segment 1 -->
+              <path d="M 254 352 C 278 368, 298 394, 310 424" fill="none" stroke="#966747" stroke-width="2.5"
+                opacity="0.10" />
+
+              <!-- Joint Seam 1 -->
+              <path
+                d="M 244.0 352.0 C 270.0 368.0 292.0 396.0 304.0 428.0 C 302.0 431.1 299.3 433.4 296.0 435.0 C 284.0 403.0 262.0 375.0 236.0 359.0 C 238.0 355.9 240.7 353.6 244.0 352.0 Z"
+                fill="#302016" />
+
+              <!-- Segment 2: Mid-Arm Bellows Ring -->
+              <path
+                d="M 206.0 392.0 C 218.0 378.0 228.0 366.0 236.0 359.0 C 262.0 375.0 284.0 403.0 296.0 435.0 C 286.0 446.0 276.0 456.0 266.0 464.0 C 252.0 434.0 230.0 408.0 206.0 392.0 Z"
+                fill="url(#arm-left-cyl)" filter="url(#metal-patina)" stroke="#3d2a1d" stroke-width="1.5" />
+              <!-- Highlight on Segment 2 -->
+              <path d="M 222 376 C 246 392, 268 418, 280 448" fill="none" stroke="#996848" stroke-width="4.5"
+                opacity="0.07" />
+
+              <!-- Joint Seam 2 -->
+              <path
+                d="M 206.0 392.0 C 230.0 408.0 252.0 434.0 266.0 464.0 C 264.0 467.1 261.3 469.4 258.0 471.0 C 244.0 441.0 222.0 415.0 198.0 399.0 C 200.0 395.9 202.7 393.6 206.0 392.0 Z"
+                fill="#2e2016" />
+
+              <!-- Segment 3: Forearm Cuff Ring -->
+              <path
+                d="M 176.0 432.0 C 184.0 418.0 192.0 406.0 198.0 399.0 C 222.0 415.0 244.0 441.0 258.0 471.0 C 248.0 480.0 238.0 488.0 228.0 494.0 C 214.0 468.0 196.0 446.0 176.0 432.0 Z"
+                fill="url(#arm-left-cyl)" filter="url(#metal-patina)" stroke="#3d2a1d" stroke-width="1.5" />
+
+              <!-- Joint Seam 3 (Dark Wrist Groove) -->
+              <path
+                d="M 176.0 432.0 C 196.0 446.0 214.0 468.0 228.0 494.0 C 226.0 497.1 223.3 499.4 220.0 501.0 C 206.0 475.0 188.0 453.0 168.0 439.0 C 170.0 435.9 172.7 433.6 176.0 432.0 Z"
+                fill="#2a1d14" />
+
+              <!-- Segment 4: Bulbous Dark-Bronze Hand/Fist Dome Cap -->
+              <g id="left-fist-cap">
+                <!-- Main Dome Body -->
+                <path
+                  d="M 168.0 439.0 C 138.0 468.0 126.0 512.0 144.0 544.0 C 164.0 576.0 208.0 574.0 234.0 542.0 C 238.0 528.0 234.0 512.0 220.0 501.0 C 206.0 475.0 188.0 453.0 168.0 439.0 Z"
+                  fill="url(#fist-cap-grad)" filter="url(#metal-patina)" stroke="#212b26" stroke-width="1.6" />
+                <!-- Upper Rim Bevel Highlight -->
+                <path d="M 171 445 C 190 458, 207 479, 220 504" fill="none" stroke="#597266" stroke-width="2.5"
+                  opacity="0.10" />
+                <!-- End Cap Step/Boss Detail at Tip -->
+                <path d="M 140 504 C 152 528, 174 548, 198 558" fill="none" stroke="#202824" stroke-width="3"
+                  opacity="0.85" />
+                <path d="M 142 501 C 154 525, 176 545, 200 555" fill="none" stroke="#51675c" stroke-width="1.8"
+                  opacity="0.65" />
+                <!-- Soft Specular Highlight on Dome -->
+                <ellipse cx="174" cy="496" rx="22" ry="15" transform="rotate(-38 174 496)" fill="#5e786b"
+                  opacity="0.04" />
+              </g>
+            </g>
+
+            <!-- ==============================================================
+           LAYER 6b: REAR JET (gimballed nozzle + animated flame, points opposite to travel)
+           ============================================================== -->
+            <g id="jet-follow">
+              <g id="jet-gimbal" transform="translate(742 672) rotate(40) scale(1.4)">
+                <g id="jet-flame" opacity="0">
+                  <circle cx="46" cy="0" r="46" fill="url(#fl-glow)" />
+                  <g id="jet-flame-body" transform="translate(30 0)">
+                    <path d="M 0 -12 C 35 -26, 95 -16, 150 0 C 95 16, 35 26, 0 12 Z" fill="url(#fl-outer)" />
+                    <path d="M 0 -8 C 30 -16, 70 -10, 108 0 C 70 10, 30 16, 0 8 Z" fill="url(#fl-mid)" />
+                    <path d="M 0 -4.5 C 22 -8, 48 -5, 70 0 C 48 5, 22 8, 0 4.5 Z" fill="url(#fl-core)" />
+                  </g>
+                  <g id="jet-sparks"></g>
+                </g>
+                <ellipse cx="0" cy="0" rx="9" ry="17" fill="#3e2a1d" stroke="#211710" stroke-width="1.5" />
+                <path d="M 0 -12 C 10 -13 20 -17 32 -21 C 36 -10 36 10 32 21 C 20 17 10 13 0 12 Z"
+                  fill="url(#leg-bronze-grad)" stroke="#281b13" stroke-width="1.5" />
+                <path d="M 12 -15 C 14 -5 14 5 12 15" fill="none" stroke="#281b13" stroke-width="2" />
+                <path d="M 24 -18 C 26 -6 26 6 24 18" fill="none" stroke="#281b13" stroke-width="1.6" />
+                <ellipse cx="32" cy="0" rx="5" ry="20" fill="#1b160d" stroke="#281b13" stroke-width="1.2" />
+                <ellipse id="jet-ember" cx="33" cy="0" rx="2.6" ry="12" fill="#e8a24a" opacity="0" />
+              </g>
+            </g>
+
+            <!-- ==============================================================
+           LAYER 7: CURLY METALLIC PIG TAIL (On Lower Right Belly)
+           ============================================================== -->
+            <g id="tail-mount">
+              <g id="curly-tail-group">
+                <!-- Cast Shadow on the Copper Belly -->
+                <path d="M 692 612
+                 C 716 598, 748 612, 756 638
+                 C 764 664, 744 686, 718 682
+                 C 694 678, 686 654, 702 636" fill="none" stroke="#1c0f06" stroke-width="13" stroke-linecap="round"
+                  filter="url(#tail-shadow)" />
+
+                <!-- Mounting Socket Ring on Copper Belly -->
+                <ellipse cx="696" cy="634" rx="13" ry="18" transform="rotate(-12 696 634)" fill="#37473f"
+                  stroke="#202824" stroke-width="1.8" />
+                <ellipse cx="696" cy="634" rx="7" ry="11" transform="rotate(-12 696 634)" fill="#1b231f" />
+
+                <!-- Back Half of the Metallic Spiral Spring Coil -->
+                <path d="M 696 634
+                 C 716 616, 744 616, 756 634
+                 C 766 650, 756 672, 736 678" fill="none" stroke="url(#tail-steel-grad)" stroke-width="11"
+                  stroke-linecap="round" />
+                <path d="M 696 634
+                 C 716 616, 744 616, 756 634
+                 C 766 650, 756 672, 736 678" fill="none" stroke="#28332e" stroke-width="11" stroke-linecap="round"
+                  opacity="0.25" />
+
+                <!-- Secondary Inner Coil Loop -->
+                <path d="M 736 678
+                 C 716 682, 704 666, 710 646
+                 C 716 626, 740 612, 762 622" fill="none" stroke="url(#tail-steel-grad)" stroke-width="10.5"
+                  stroke-linecap="round" />
+
+                <!-- Front Overlapping Coil Loop & Tapered Tip -->
+                <path d="M 762 622
+                 C 780 630, 784 654, 768 670
+                 C 754 684, 734 682, 724 668" fill="none" stroke="url(#tail-steel-grad)" stroke-width="10.5"
+                  stroke-linecap="round" />
+
+                <!-- Crisp Metallic Highlight Wire along Spiral -->
+                <path d="M 702 629 C 720 615, 744 616, 754 631" fill="none" stroke="#739182" stroke-width="2.2"
+                  stroke-linecap="round" opacity="0.11" />
+                <path d="M 712 645 C 718 627, 740 614, 760 623 C 776 630, 780 651, 766 666" fill="none" stroke="#739182"
+                  stroke-width="2.2" stroke-linecap="round" opacity="0.12" />
+                <!-- Dark Outline Definition for 3D Overlap -->
+                <path d="M 724 668 C 718 659, 718 648, 724 640" fill="none" stroke="#324039" stroke-width="8"
+                  stroke-linecap="round" />
+                <path d="M 724 668 C 718 659, 718 648, 724 640" fill="none" stroke="#5a7366" stroke-width="5"
+                  stroke-linecap="round" />
+              </g>
+            </g>
+          </g>
+        </g>
+      </g>
+    </svg>
+
+    <!-- Minimal Floating Utility Bar (Hidden on print/export, subtle & non-intrusive) -->
+    <div class="fixed top-3 left-1/2 -translate-x-1/2 text-[11px] text-neutral-500 pointer-events-none">← → or A / D to
+      walk · hold Shift to run · hold P to pump · click the belly to boing · F fly / land · W / ↑ / Space rise · S / ↓
+      descend</div>
+    <div id="controls"
+      class="fixed bottom-4 left-1/2 -translate-x-1/2 max-w-[96vw] flex-wrap justify-center flex items-center gap-1.5 bg-white/90 backdrop-blur-md border border-neutral-200/80 shadow-sm rounded-full px-2.5 py-1.5 text-xs text-neutral-600 transition-opacity duration-200">
+      <button id="btn-left" type="button" title="Walk left"
+        class="w-8 h-7 rounded-full hover:bg-neutral-100 active:scale-95 transition font-semibold">◀</button>
+      <button id="btn-right" type="button" title="Walk right"
+        class="w-8 h-7 rounded-full hover:bg-neutral-100 active:scale-95 transition font-semibold">▶</button>
+      <button id="btn-run" type="button" title="Toggle run"
+        class="px-2.5 py-1 rounded-full hover:bg-neutral-100 active:scale-95 transition font-medium">Run</button>
+      <button id="btn-fx" type="button" title="Toggle procedural texture (turn off for max speed)"
+        class="px-2.5 py-1 rounded-full hover:bg-neutral-100 active:scale-95 transition font-medium on">Texture</button>
+      <div class="w-px h-3.5 bg-neutral-200"></div>
+      <button id="btn-fly" type="button" title="Toggle flight (F)"
+        class="px-2.5 py-1 rounded-full hover:bg-neutral-100 active:scale-95 transition font-medium">Fly</button>
+      <button id="btn-up" type="button" title="Rise (W / ↑ / Space)"
+        class="w-8 h-7 rounded-full hover:bg-neutral-100 active:scale-95 transition font-semibold">▲</button>
+      <button id="btn-down" type="button" title="Descend (S / ↓)"
+        class="w-8 h-7 rounded-full hover:bg-neutral-100 active:scale-95 transition font-semibold">▼</button>
+      <div class="w-px h-3.5 bg-neutral-200"></div>
+      <button id="btn-pump" type="button" title="Hold to pump air in (or press P)"
+        class="px-2.5 py-1 rounded-full hover:bg-neutral-100 active:scale-95 transition font-medium">Pump</button>
+      <input id="inflate" type="range" min="0" max="100" value="32" aria-label="Inflate"
+        class="w-24 accent-neutral-800" />
+      <span id="inflate-label" class="min-w-[2.4rem] text-center font-mono text-[11px] text-neutral-700">32%</span>
+      <button id="btn-deflate" type="button" title="Let the air out"
+        class="px-2.5 py-1 rounded-full hover:bg-neutral-100 active:scale-95 transition font-medium">Deflate</button>
+      <div class="w-px h-3.5 bg-neutral-200"></div>
+      <button id="btn-grid" type="button" title="Toggle Precision Grid"
+        class="px-2.5 py-1 rounded-full hover:bg-neutral-100 active:scale-95 transition font-medium">
+        Grid
+      </button>
+      <div class="w-px h-3.5 bg-neutral-200"></div>
+      <button id="btn-zoom-out" type="button" title="Zoom Out"
+        class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-neutral-100 active:scale-95 transition font-semibold">
+        −
+      </button>
+      <span id="zoom-label" class="min-w-[3.2rem] text-center font-mono text-[11px] text-neutral-700">100%</span>
+      <button id="btn-zoom-in" type="button" title="Zoom In"
+        class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-neutral-100 active:scale-95 transition font-semibold">
+        +
+      </button>
+      <button id="btn-reset" type="button" title="Reset View"
+        class="px-2.5 py-1 rounded-full hover:bg-neutral-100 active:scale-95 transition font-medium">
+        Reset
+      </button>
+      <div class="w-px h-3.5 bg-neutral-200"></div>
+      <button id="btn-download" type="button" title="Download Standalone SVG"
+        class="px-3 py-1 rounded-full bg-neutral-900 text-white hover:bg-neutral-700 active:scale-95 transition font-medium">
+        Export SVG
+      </button>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      const stage = document.getElementById('stage');
+      const svg = document.getElementById('robot-svg');
+      const zoomLabel = document.getElementById('zoom-label');
+      const btnGrid = document.getElementById('btn-grid');
+      const btnZoomIn = document.getElementById('btn-zoom-in');
+      const btnZoomOut = document.getElementById('btn-zoom-out');
+      const btnReset = document.getElementById('btn-reset');
+      const btnDownload = document.getElementById('btn-download');
+
+      let scale = 1;
+      let panX = 0;
+      let panY = 0;
+      let isDragging = false;
+      let startX = 0;
+      let startY = 0;
+
+      function updateTransform() {
+        svg.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+      }
+
+      function clampScale(val) {
+        return Math.min(Math.max(val, 0.4), 4.5);
+      }
+
+      // Zoom controls
+      btnZoomIn.addEventListener('click', () => {
+        scale = clampScale(scale + 0.25);
+        updateTransform();
+      });
+
+      btnZoomOut.addEventListener('click', () => {
+        scale = clampScale(scale - 0.25);
+        updateTransform();
+      });
+
+      btnReset.addEventListener('click', () => {
+        scale = 1;
+        panX = 0;
+        panY = 0;
+        updateTransform();
+      });
+
+      // Toggle background inspection grid
+      btnGrid.addEventListener('click', () => {
+        const active = document.body.classList.toggle('bg-inspect-grid');
+        btnGrid.classList.toggle('bg-neutral-900', active);
+        btnGrid.classList.toggle('text-white', active);
+      });
+
+      // Mouse wheel zoom
+      stage.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.12 : -0.12;
+        scale = clampScale(scale + delta);
+        updateTransform();
+      }, { passive: false });
+
+      // Pan drag support (mouse & touch)
+      stage.addEventListener('mousedown', (e) => {
+        if (e.target.closest('#controls')) return;
+        isDragging = true;
+        startX = e.clientX - panX;
+        startY = e.clientY - panY;
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        panX = e.clientX - startX;
+        panY = e.clientY - startY;
+        updateTransform();
+      });
+
+      window.addEventListener('mouseup', () => {
+        isDragging = false;
+      });
+
+      stage.addEventListener('touchstart', (e) => {
+        if (e.target.closest('#controls') || e.touches.length !== 1) return;
+        isDragging = true;
+        startX = e.touches[0].clientX - panX;
+        startY = e.touches[0].clientY - panY;
+      }, { passive: true });
+
+      stage.addEventListener('touchmove', (e) => {
+        if (!isDragging || e.touches.length !== 1) return;
+        panX = e.touches[0].clientX - startX;
+        panY = e.touches[0].clientY - startY;
+        updateTransform();
+      }, { passive: true });
+
+      stage.addEventListener('touchend', () => {
+        isDragging = false;
+      });
+
+      // Clean SVG file export
+      btnDownload.addEventListener('click', () => {
+        try {
+          const clone = svg.cloneNode(true);
+          clone.removeAttribute('style');
+          clone.setAttribute('width', '1000');
+          clone.setAttribute('height', '1000');
+          const serializer = new XMLSerializer();
+          const source = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(clone);
+          const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'steampunk_piggybank_robot.svg';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error('Export failed:', err);
+        }
+      });
+
+      // ================= WALK ENGINE =================
+      // Articulated legs (hip > knee > ankle) driven by one phase value.
+      // Body height is solved from forward kinematics so the lowest foot always
+      // touches the ground (no floating / sinking). The loop sleeps when idle.
+      const $ = (id) => document.getElementById(id);
+      const D = Math.PI / 180, GY = 911, S = 46, F = 37;
+      const HIPS = [{ x: 498, y: 782, T: 46 }, { x: 622, y: 772, T: 56 }];
+      const actor = $('actor'), bodyG = $('body'), legsG = $('legs-group'), groundLine = $('ground-line');
+      const btnFx = $('btn-fx'), btnRun = $('btn-run');
+
+      const bronze = 'fill="url(#leg-bronze-grad)" stroke="#2b1e10" stroke-width="1.5"';
+      const hl = 'stroke="#d9b987" stroke-width="3" fill="none" stroke-linecap="round"';
+      const legSVG = (i, T) => `<g id="L${i}">
+        <path d="M-28 -18Q0 -24 28 -18Q31 ${T / 2} 24 ${T}Q0 ${T + 5} -24 ${T}Q-31 ${T / 2} -28 -18Z" ${bronze}/>
+        <path d="M-15 -8Q-17 ${T / 2} -13 ${T - 6}" ${hl} opacity=".35"/>
+        <g id="S${i}">
+          <path d="M-21 0Q0 -5 21 0Q24 ${S / 2} 18 ${S}Q0 ${S + 4} -18 ${S}Q-24 ${S / 2} -21 0Z" ${bronze}/>
+          <path d="M-11 6Q-13 ${S / 2} -10 ${S - 8}" ${hl} opacity=".3"/>
+          <circle r="17" fill="#31281e" stroke="#14100a" stroke-width="1.5"/>
+          <circle r="8" fill="url(#rivet-grad)" stroke="#2d251c"/>
+          <g id="F${i}">
+            <rect x="-23" y="-6" width="46" height="24" rx="12" fill="#695640" stroke="#32291e" stroke-width="1.5"/>
+            <path d="M26 16Q34 24 30 33Q-5 40 -40 33C-56 33-57 21-45 18C-36 15-30 16-26 16Z" fill="#64523e" stroke="#31281e" stroke-width="1.5"/>
+            <path d="M30 31Q34 34 30 37Q-6 43 -42 37C-58 37-59 27-55 24Q-51 24 -46 28Q-43 30 -40 31Z" fill="#4c3e2f" stroke="#2a2219" stroke-width="1.5"/>
+            <path d="M-30 20Q-45 20-50 27" stroke="#756048" stroke-width="2" fill="none" opacity=".7"/>
+          </g>
+        </g></g>`;
+      legsG.innerHTML = legSVG(1, HIPS[1].T) + legSVG(0, HIPS[0].T); // far leg first
+
+      const part = (id) => $(id);
+      const L = HIPS.map((_, i) => ({ t: $('L' + i), s: $('S' + i), f: $('F' + i) }));
+      const P = {
+        la: part('left-arm-group'), ra: part('right-arm-group'),
+        le: part('left-ear'), re: part('right-ear'),
+        tail: part('curly-tail-group'), head: part('head-and-ears')
+      };
+      const ARM = 0.72;   // arm size (1 = original)
+      const armT = (el, a, x, y) => el.setAttribute('transform', `rotate(${a.toFixed(2)} ${x} ${y}) translate(${x} ${y}) scale(${ARM}) translate(${-x} ${-y})`);
+      const rot = (el, a, x, y) => el.setAttribute('transform', `rotate(${a.toFixed(2)} ${x} ${y})`);
+
+      // damped springs: parts lag behind the body, overshoot and wobble back like rubber
+      const spr = (k, c) => ({
+        x: 0, v: 0, k, c, step(tg, dt) { for (let i = 0; i < 3; i++) { const h = dt / 3; this.v += (this.k * (tg - this.x) - this.c * this.v) * h; this.x += this.v * h; } return this.x; },
+        busy(tg) { return Math.abs(this.v) > 0.02 || Math.abs(tg - this.x) > 0.02; }
+      });
+      const SP = { la: spr(95, 3.2), ra: spr(85, 3), tail: spr(60, 2.2), sq: spr(150, 5), sx: spr(150, 5), lean: spr(70, 3.2) };
+      const clamp = (v, a) => Math.max(-a, Math.min(a, v));
+      let prevDy = 0, prevVy = 0, ay = 0, prevM = 0, dm = 0, springBusy = false, stepNo = 0, primed = false;
+
+      let phi = 0, m = 0, dir = -1, off = 0, last = 0, raf = 0, lite = false, frames = 0, slow = 0;
+      const keys = { l: 0, r: 0, shift: 0, run: 0, u: 0, d: 0 };
+      // ---- flight: altitude follows a goal through an underdamped spring (springy lift-off + landing)
+      const ALT_MAX = 520;
+      let goalAlt = 0, alt = 0, vAlt = 0, thrS = 0, flying = false;
+      const camG = $('cam'), shadowG = $('ground-shadow'), gimbal = $('jet-gimbal'), flame = $('jet-flame'),
+        flameBody = $('jet-flame-body'), ember = $('jet-ember'), btnFly = $('btn-fly');
+      const sparks = [...Array(9)].map((_, i) => {
+        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        c.setAttribute('r', (1.6 + (i % 3) * 0.7).toFixed(1)); c.setAttribute('fill', i % 2 ? '#ffd27a' : '#f0a53c');
+        $('jet-sparks').appendChild(c); return { c, seed: (i * 0.618) % 1 };
+      });
+
+      function pose(ds, dt) {
+        dt = dt || 0.016;
+        const mm = Math.min(m, 1.6), airK = Math.min(1, alt / 40), hipA = 27 * D * Math.min(m, 1) * (1 - airK), kneeA = 46 * D * mm * (1 - airK);
+        let lowest = 0;
+        HIPS.forEach((hp, i) => {
+          const p = phi + i * Math.PI;
+          const h = hipA * Math.sin(p) - airK * (6 + 12 * Math.min(m, 1.7) / 1.7) * D, k = -kneeA * Math.max(0, Math.cos(p)) - airK * 22 * D, a = -(h + k) * 0.85;
+          lowest = Math.max(lowest, hp.y + hp.T * Math.cos(h) + S * Math.cos(h + k) + F * Math.cos(h + k + a));
+          L[i].t.setAttribute('transform', `translate(${hp.x} ${hp.y}) rotate(${(h / D).toFixed(2)})`);
+          L[i].s.setAttribute('transform', `translate(0 ${hp.T}) rotate(${(k / D).toFixed(2)})`);
+          L[i].f.setAttribute('transform', `translate(0 ${S}) rotate(${(a / D).toFixed(2)})`);
+        });
+        const bob = airK * 3.5 * Math.sin(last * 0.004), dyN = GY - lowest - alt + bob, dy = dyN.toFixed(2), s1 = Math.sin(phi), w = Math.sin(2 * phi - 1.2);
+        // body motion signals that drive the follow-through
+        if (!primed) { prevDy = dyN; primed = true; }
+        const vy = (dyN - prevDy) / dt; ay = clamp(0.6 * ay + 0.4 * (vy - prevVy) / dt, 900); prevVy = vy; prevDy = dyN;
+        dm = (m - prevM) / dt; prevM = m;
+        const sq = SP.sq.step(clamp(ay * 0.00007, 0.06), dt), sx = SP.sx.step(clamp(ay * 0.00004, 0.04), dt);
+        const lean = SP.lean.step(clamp(-1.1 * dm, 14), dt);
+        const la = SP.la.step(7 * mm * s1 + clamp(ay * 0.012, 14) - lean * 0.8, dt);
+        const ra = SP.ra.step(-6 * mm * s1 - clamp(ay * 0.012, 14) - lean * 0.8, dt);
+        const tl = SP.tail.step(14 * mm * Math.sin(2 * phi + 0.8) - clamp(ay * 0.02, 22) + lean * 1.4, dt);
+        if (m > 0.3 && Math.floor(phi / Math.PI) !== stepNo) { stepNo = Math.floor(phi / Math.PI); if (window.__kickBelly) window.__kickBelly(0.012 * Math.min(m, 1.7)); } // each footfall jiggles the belly
+        // engine vibration: fast, tiny shake that grows with thrust (only while airborne)
+        const vb = thrS * airK, T = last;
+        const vibX = vb * (1.3 * Math.sin(T * 0.085) + 0.7 * Math.sin(T * 0.131 + 2)), vibY = vb * (1.1 * Math.sin(T * 0.097 + 1) + 0.6 * Math.sin(T * 0.153)), vibR = vb * 0.45 * Math.sin(T * 0.11 + 0.5);
+        legsG.setAttribute('transform', `translate(${(vibX * 1.3).toFixed(2)} ${(+dy + vibY * 1.3).toFixed(2)})`);
+        const bodyRot = ((-2 * mm + 1.2 * mm * Math.sin(2 * phi)) * (1 - airK) + airK * (-11 * Math.min(m, 1.7) / 1.7 + 1.8 * Math.sin(last * 0.003)) + lean * 0.5 + vibR);
+        bodyG.setAttribute('transform', `translate(${vibX.toFixed(2)} ${(+dy + vibY).toFixed(2)}) translate(550 790) scale(${(1 + sx).toFixed(4)} ${(1 - sq).toFixed(4)}) translate(-550 -790) rotate(${bodyRot.toFixed(2)} 550 750)`);
+        armT(P.la, la + vb * 1.6 * Math.sin(T * 0.12), 300, 345);
+        armT(P.ra, ra + vb * 1.6 * Math.sin(T * 0.12 + 1.3), 640, 235);
+        rot(P.le, 7 * mm * w, 350, 195);
+        rot(P.re, -6 * mm * w, 490, 150);
+        rot(P.tail, tl + vb * 2.4 * Math.sin(T * 0.14 + 0.7), 696, 634);
+        rot(P.head, 1.5 * mm * Math.sin(2 * phi + 0.5), 440, 260);
+        springBusy = Object.values(SP).some((q) => q.busy(0)) || Math.abs(ay) > 5;
+        // ---- jet: thrust level -> flame size; flame points opposite to where he is heading (back when moving, down when hovering)
+        flying = goalAlt > 0 || alt > 0.4 || Math.abs(vAlt) > 0.5;
+        const sp = Math.min(1, m / 1.2);
+        let thr = flying ? 0.3 + 0.4 * Math.min(1, Math.abs(vAlt) / 150) + 0.3 * sp + (keys.u ? 0.2 : 0) : 0;
+        if (vAlt < -30) thr *= 0.55;
+        thrS += (Math.min(1, thr) - thrS) * Math.min(1, dt * 9);
+        const ang = flying ? 80 - 66 * sp + (keys.u ? 6 : 0) : 40;
+        gimbal.setAttribute('transform', `translate(742 672) rotate(${ang.toFixed(1)}) scale(1.4)`);
+        const fl = 1 + 0.08 * Math.sin(last * 0.045) + 0.06 * Math.sin(last * 0.11 + 1) + 0.05 * Math.random();
+        flame.setAttribute('opacity', Math.min(1, thrS * 3.2).toFixed(2));
+        ember.setAttribute('opacity', Math.min(0.9, thrS * 2).toFixed(2));
+        flameBody.setAttribute('transform', `translate(30 0) scale(${((0.35 + 1.25 * thrS) * fl).toFixed(3)} ${((0.8 + 0.5 * thrS) * (2 - fl)).toFixed(3)})`);
+        sparks.forEach((q) => {
+          const tt = (last * 0.0011 * (0.6 + thrS) + q.seed) % 1;
+          q.c.setAttribute('cx', (36 + tt * (50 + thrS * 150)).toFixed(1));
+          q.c.setAttribute('cy', (Math.sin(q.seed * 40 + last * 0.004) * (3 + tt * 16)).toFixed(1));
+          q.c.setAttribute('opacity', (Math.max(0, 1 - tt) * Math.min(1, thrS * 2)).toFixed(2));
+        });
+        // camera pulls back as he climbs so he stays in frame; shadow shrinks and fades
+        const zs = 1 / (1 + alt * 0.0011);
+        camG.setAttribute('transform', `translate(500 918) scale(${zs.toFixed(4)}) translate(-500 -918)`);
+        shadowG.setAttribute('transform', `translate(560 916) scale(${Math.max(0.35, 1 - alt / 700).toFixed(3)} 1) translate(-560 -916)`);
+        shadowG.setAttribute('opacity', Math.max(0.25, 1 - alt / 500).toFixed(2));
+        btnFly.classList.toggle('on', goalAlt > 0);
+        springBusy = springBusy || flying;
+        actor.setAttribute('transform', dir > 0 ? 'translate(1100 0) scale(-1 1)' : '');
+        if (ds) { off += dir * ds; groundLine.setAttribute('stroke-dashoffset', off.toFixed(1)); }
+      }
+
+      function frame(t) {
+        const dt = Math.min((t - last) / 1000, 0.05) || 0.016; last = t;
+        const want = keys.r - keys.l;
+        if (want) dir = want;
+        const target = want ? (keys.shift || keys.run ? 1.7 : 1) : 0;
+        const vk = keys.u - keys.d;
+        if (vk) goalAlt = Math.max(0, Math.min(ALT_MAX, goalAlt + vk * 230 * dt));
+        for (let i = 0; i < 3; i++) { const hh = dt / 3; vAlt += (16 * (goalAlt - alt) - 5.2 * vAlt) * hh; alt += vAlt * hh; if (alt < 0) { alt = 0; vAlt *= -0.25; } }
+        m += (target - m) * Math.min(1, dt * 9);
+        if (!target && m < 0.02) m = 0;
+        const omega = 7.5 * m;
+        phi += omega * dt;
+        pose(129 * 27 * D * Math.min(m, 1) * omega * 0.9 * dt, dt); // ground speed matches the stance foot
+        if (!lite && m > 0.5 && ++frames === 60) { if (slow > 30) setLite(true); frames = slow = 0; }
+        if (dt > 0.034) slow++;
+        raf = (m > 0 || target || springBusy || goalAlt > 0 || alt > 0.4) ? requestAnimationFrame(frame) : 0;
+      }
+      const kick = () => { if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); } };
+
+      function setLite(v) {
+        lite = v;
+        document.body.classList.toggle('lite', v);
+        btnFx.classList.toggle('on', !v);
+      }
+      btnFx.addEventListener('click', () => setLite(!lite));
+      btnRun.addEventListener('click', () => { keys.run ^= 1; btnRun.classList.toggle('on', !!keys.run); kick(); });
+
+      const KM = { ArrowLeft: 'l', a: 'l', A: 'l', ArrowRight: 'r', d: 'r', D: 'r', ArrowUp: 'u', w: 'u', W: 'u', ' ': 'u', ArrowDown: 'd', s: 'd', S: 'd' };
+      const setKey = (e, v) => {
+        keys.shift = e.shiftKey ? 1 : 0;
+        const k = KM[e.key];
+        if (k) { keys[k] = v; e.preventDefault(); }
+        kick();
+      };
+      addEventListener('keydown', (e) => { if ((e.key === 'f' || e.key === 'F') && !e.repeat) { goalAlt = goalAlt > 0 ? 0 : 170; kick(); } setKey(e, 1); });
+      btnFly.addEventListener('click', () => { goalAlt = goalAlt > 0 ? 0 : 170; kick(); });
+      addEventListener('keyup', (e) => setKey(e, 0));
+      addEventListener('blur', () => { keys.l = keys.r = keys.shift = keys.u = keys.d = 0; });
+
+      [['btn-left', 'l'], ['btn-right', 'r'], ['btn-up', 'u'], ['btn-down', 'd']].forEach(([id, k]) => {
+        const b = $(id), on = () => { keys[k] = 1; kick(); }, offf = () => { keys[k] = 0; };
+        b.addEventListener('pointerdown', on);
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => b.addEventListener(ev, offf));
+      });
+
+      pose(0);
+    })();
+  </script>
+
+  <script>
+    // ================= BALLOON INFLATION =================
+    // Every belly shape keeps its original geometry in data-o / data-e and is
+    // re-pushed outward from the belly centre by a smooth bump (a: 0 = flat, 1 = balloon).
+    (function () {
+      const CX = 560, CY = 650;
+      const paths = [...document.querySelectorAll('[data-o]')].map((el) => ({
+        el, tok: el.getAttribute('data-o').match(/[MCLZ]|-?\d+(?:\.\d+)?/g)
+      }));
+      const ells = [...document.querySelectorAll('[data-e]')].map((el) => {
+        const [cx, cy, rx, ry, ang] = el.getAttribute('data-e').split(' ').map(Number);
+        return { el, cx, cy, rx, ry, ang };
+      });
+      const mount = document.getElementById('tail-mount'), slotF = document.getElementById('slot-follow'), jetF = document.getElementById('jet-follow');
+      const slider = document.getElementById('inflate'), label = document.getElementById('inflate-label');
+      const f = (v) => v.toFixed(1);
+
+      function apply(a, st, wob) {
+        st = st || 0; wob = wob || 0;       // st: + = taller & thinner, - = squashed & wider; wob: ripple through the skin
+        const sg = 150 + 70 * a, gain = 0.9 * a, grow = 1 + 0.55 * a;
+        const push = (x, y) => {
+          const dx = x - CX, dy = y - CY, r2 = dx * dx + dy * dy, k = gain * Math.exp(-r2 / (2 * sg * sg));
+          // rubber ripple: a wave travelling outward from the belly centre
+          const ang = Math.atan2(dy, dx), ripple = 1 + wob * Math.sin(Math.sqrt(r2) * 0.035 - ripplePhase + ang * 2);
+          return [x + dx * k * ripple * (1 - st), y + dy * k * ripple * (1 + st)];
+        };
+        for (const p of paths) {
+          let out = '', i = 0;
+          const t = p.tok;
+          while (i < t.length) {
+            if (/[MCLZ]/.test(t[i])) { out += t[i++] + ' '; continue; }
+            const [nx, ny] = push(+t[i], +t[i + 1]);
+            out += f(nx) + ' ' + f(ny) + ' '; i += 2;
+          }
+          p.el.setAttribute('d', out.trim());
+        }
+        for (const e of ells) {
+          const [nx, ny] = push(e.cx, e.cy);
+          e.el.setAttribute('cx', f(nx)); e.el.setAttribute('cy', f(ny));
+          e.el.setAttribute('rx', f(e.rx * grow * (1 - st * 0.6))); e.el.setAttribute('ry', f(e.ry * grow * (1 + st * 0.6)));
+          if (e.ang) e.el.setAttribute('transform', `rotate(${e.ang} ${f(nx)} ${f(ny)})`);
+        }
+        const [tx, ty] = push(696, 634);
+        mount.setAttribute('transform', `translate(${f(tx - 696)} ${f(ty - 634)})`);
+        // the belly hole (coin slot) ignores the springy jiggle/ripple: it only follows the slow inflate level, so it never vibrates while moving
+        const aS = Math.min(1.3, goalLevel()), sgS = 150 + 70 * aS, gS = 0.9 * aS, dxS = 545 - CX, dyS = 450 - CY, kS = gS * Math.exp(-(dxS * dxS + dyS * dyS) / (2 * sgS * sgS));
+        const px = 545 + dxS * kS, py = 450 + dyS * kS, ss = 1 + 0.3 * aS;
+        slotF.setAttribute('transform', `translate(${f(px - 545)} ${f(py - 450)}) translate(545 450) scale(${f(ss)} ${f(ss)}) translate(-545 -450)`);
+        const [jx, jy] = push(742, 672); jetF.setAttribute('transform', `translate(${f(jx - 742)} ${f(jy - 672)})`);
+        label.textContent = Math.round(Math.min(a, 1) * 100) + '%';
+      }
+      let ripplePhase = 0;
+      const goalLevel = () => goal;
+
+      // spring physics: the skin overshoots, wobbles and settles like stretched rubber
+      const K = 0.075, DAMP = 0.045;                 // stiffness / damping (lower damping = more jiggle)
+      let level = +slider.value / 100, goal = level, vel = 0, pumping = 0, raf = 0, last = 0, stroke = 0;
+      function tick(now) {
+        const dt = Math.min((now - last) / 16.667 || 1, 2.5); last = now;
+        if (pumping) {
+          goal = Math.min(1, goal + 0.0075 * dt);
+          stroke += dt;
+          if (stroke > 12) { stroke = 0; vel += 0.055; }   // each pump stroke = a little "pfff" kick
+        }
+        vel += (K * (goal - level) - DAMP * vel) * dt;
+        level += vel * dt;
+        if (level < 0) { level = 0; vel *= -0.4; }
+        const a = Math.min(1.3, level);
+        ripplePhase += 0.35 * dt * (0.4 + Math.min(1, Math.abs(vel) * 18));
+        const wob = Math.min(0.12, Math.abs(vel) * 2.2);          // skin ripples while it's moving
+        apply(a, Math.max(-0.34, Math.min(0.34, vel * 6.5)), wob); // fast growth = stretch, rebound = squash
+        slider.value = Math.round(goal * 100);
+        const alive = pumping || Math.abs(goal - level) > 0.0008 || Math.abs(vel) > 0.0006;
+        raf = alive ? requestAnimationFrame(tick) : 0;
+        if (!alive) apply(goal, 0);
+      }
+      const kick = () => { if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); } };
+
+      slider.addEventListener('input', () => { goal = +slider.value / 100; kick(); });
+      const pump = document.getElementById('btn-pump');
+      pump.addEventListener('pointerdown', () => { pumping = 1; kick(); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => pump.addEventListener(ev, () => { pumping = 0; }));
+      document.getElementById('btn-deflate').addEventListener('click', () => { goal = 0; kick(); });
+      addEventListener('keydown', (e) => { if (e.key === 'p' || e.key === 'P') { pumping = 1; kick(); } });
+      addEventListener('keyup', (e) => { if (e.key === 'p' || e.key === 'P') pumping = 0; });
+      addEventListener('blur', () => { pumping = 0; });
+
+      document.getElementById('torso-main').addEventListener('click', () => { vel += 0.16; kick(); });   // poke the belly: boing
+      window.__kickBelly = (v) => { vel += v; kick(); };
+      window.__setInflate = (v) => { goal = level = v; vel = 0; apply(v, 0); slider.value = Math.round(v * 100); };  // handy for testing
+      apply(level);
+    })();
+  </script>
+</body>
+
+</html>
