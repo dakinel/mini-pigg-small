@@ -121,7 +121,7 @@ const PLUGIN_SCOPED_CSS = `
     filter: none !important;
   }
 `;
-type BossAction = 'PATTERN_MOVE' | 'PATTERN_STOP' | 'JET_FLIGHT' | 'BOUNCY_BALL' | 'BREAKING';
+type BossAction = 'WALK' | 'PATTERN_MOVE' | 'PATTERN_STOP' | 'JET_FLIGHT' | 'BOUNCY_BALL' | 'BREAKING';
 export type LaserStyleId = 'SLING_ARC' | 'RAPID_WHIP' | 'HIGH_LOB' | 'STRAIGHT_RAIL' | 'SNIPER_LOCK';
 export type LaserModeSetting = 'AUTO' | LaserStyleId;
 
@@ -325,6 +325,9 @@ interface Projectile {
   bounces?: number;
   armorHitCooldown?: number;
   trail?: { x: number; y: number }[];
+  power?: number;
+  pumpValue?: number;
+  missedHandled?: boolean;
 }
 
 interface CanvasParticle {
@@ -367,11 +370,30 @@ interface DualTrailPoint {
   y1: number;
   x2: number;
   y2: number;
+  cx: number;
+  cy: number;
   life: number;
   maxLife: number;
   speed: number;
   thr: number;
   belly: number;
+  ballM: number;
+  ballAng: number;
+  squash: number;
+  nervous: number;
+  vx?: number;
+  vy?: number;
+}
+
+interface BallAfterimage {
+  x: number;
+  y: number;
+  r: number;
+  sx: number;
+  sy: number;
+  rot: number;
+  life: number;
+  maxLife: number;
 }
 
 interface LandingRing {
@@ -413,6 +435,56 @@ interface SlotIntakePulse {
   dir: number;
 }
 
+interface CanvasShockwave {
+  x: number;
+  y: number;
+  r: number;
+  maxR: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  lineWidth: number;
+}
+
+interface MechanicalDebris {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  r: number;
+  rot: number;
+  vrot: number;
+  kind: 'screw' | 'bolt' | 'washer' | 'gear' | 'spring' | 'nut' | 'plate';
+  color: string;
+  life: number;
+  maxLife: number;
+  bounces: number;
+  mass?: number;
+  bounce?: number;
+}
+
+interface DisassemblyPart {
+  id: string;
+  el: SVGGElement | null;
+  cx: number;
+  cy: number;
+  r: number;
+  mass: number;
+  detachAt: number;
+  vx: number;
+  vy: number;
+  vrot: number;
+  bounce: number;
+  wx0: number;
+  wy0: number;
+  wx: number;
+  wy: number;
+  rot: number;
+  detached: boolean;
+  clangs: number;
+  unscrew?: boolean;
+}
+
 interface HudState {
   score: number;
   bestScore: number;
@@ -422,6 +494,7 @@ interface HudState {
   spotTotal: number;
   pumpProgress: number;
   pumpTarget: number;
+  pumpHoldPct: number;
   bellyPct: number;
   bossActionLabel: string;
   dashReadyPct: number;
@@ -436,6 +509,10 @@ interface HudState {
   laserLabel: string;
   laserCurved: boolean;
   laserModeSetting: LaserModeSetting;
+  nervousPct: number;
+  isNervous: boolean;
+  handChargePct: number;
+  handStateLabel: string;
 }
 
 const HAND_SPRITE_URL = 'https://i.imgur.com/SXUGSfK.png';
@@ -452,6 +529,9 @@ const REVOLVER_CHAMBERS = 6;
 const MIN_X = 160;
 const MAX_X = WORLD_W - 160;
 const DEFAULT_BEST_KEY = 'cursor_vs_piggy_best_v3';
+const BALL_CX = 552;
+const BALL_CY = 505;
+const getBallSvgRadius = (belly: number) => 236 + 42 * Math.min(1.2, Math.max(0, belly));
 
 function readBestScore(key: string): number {
   try {
@@ -590,35 +670,198 @@ class FightSynth {
     osc.stop(now + 0.12);
   }
 
+  public playDisassemblyStart() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // Rapid high-torque metallic bolt unscrewing ratchet + sharp thread snaps
+    [0, 0.042, 0.084, 0.126, 0.17, 0.215].forEach((offset, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(720 + idx * 140, now + offset);
+      osc.frequency.exponentialRampToValueAtTime(1140 + idx * 165, now + offset + 0.032);
+      gain.gain.setValueAtTime(0.068, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.042);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.046);
+    });
+
+    // Heavy cast-iron boiler pressure groan
+    const groan = ctx.createOscillator();
+    const groanGain = ctx.createGain();
+    groan.type = 'triangle';
+    groan.frequency.setValueAtTime(92, now);
+    groan.frequency.exponentialRampToValueAtTime(185, now + 0.34);
+    groanGain.gain.setValueAtTime(0.05, now);
+    groanGain.gain.linearRampToValueAtTime(0.14, now + 0.28);
+    groanGain.gain.exponentialRampToValueAtTime(0.001, now + 0.37);
+    groan.connect(groanGain).connect(ctx.destination);
+    groan.start(now);
+    groan.stop(now + 0.38);
+
+    const whine = ctx.createOscillator();
+    const whineGain = ctx.createGain();
+    whine.type = 'sawtooth';
+    whine.frequency.setValueAtTime(165, now);
+    whine.frequency.exponentialRampToValueAtTime(640, now + 0.35);
+    whineGain.gain.setValueAtTime(0.02, now);
+    whineGain.gain.linearRampToValueAtTime(0.085, now + 0.29);
+    whineGain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+    whine.connect(whineGain).connect(ctx.destination);
+    whine.start(now);
+    whine.stop(now + 0.39);
+  }
+
   public playPiggyBreak() {
     const ctx = this.ensure();
     if (!ctx) return;
     const now = ctx.currentTime;
 
-    // Pop boom
+    // Deep heavy sub-bass cast-hull pressure blast
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(125, now);
+    sub.frequency.exponentialRampToValueAtTime(28, now + 0.52);
+    subGain.gain.setValueAtTime(0.28, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.54);
+    sub.connect(subGain).connect(ctx.destination);
+    sub.start(now);
+    sub.stop(now + 0.55);
+
     const boom = ctx.createOscillator();
     const boomGain = ctx.createGain();
     boom.type = 'sawtooth';
-    boom.frequency.setValueAtTime(190, now);
-    boom.frequency.exponentialRampToValueAtTime(42, now + 0.35);
-    boomGain.gain.setValueAtTime(0.22, now);
-    boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+    boom.frequency.setValueAtTime(185, now);
+    boom.frequency.exponentialRampToValueAtTime(34, now + 0.44);
+    boomGain.gain.setValueAtTime(0.2, now);
+    boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
     boom.connect(boomGain).connect(ctx.destination);
     boom.start(now);
-    boom.stop(now + 0.38);
+    boom.stop(now + 0.48);
+
+    // Metallic hull plate shatter crunch
+    [420, 690, 940, 1280].forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(f, now + i * 0.018);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.42, now + i * 0.018 + 0.14);
+      gain.gain.setValueAtTime(0.055, now + i * 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.018 + 0.16);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + i * 0.018);
+      osc.stop(now + i * 0.018 + 0.17);
+    });
 
     // Jackpot coin cascade
-    [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => {
+    [523.25, 659.25, 783.99, 1046.5, 1318.5, 1567.98].forEach((f, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(f, now + 0.08 + i * 0.06);
-      gain.gain.setValueAtTime(0.13, now + 0.08 + i * 0.06);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08 + i * 0.06 + 0.32);
+      osc.frequency.setValueAtTime(f, now + 0.09 + i * 0.055);
+      gain.gain.setValueAtTime(0.115, now + 0.09 + i * 0.055);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09 + i * 0.055 + 0.34);
       osc.connect(gain).connect(ctx.destination);
-      osc.start(now + 0.08 + i * 0.06);
-      osc.stop(now + 0.08 + i * 0.06 + 0.34);
+      osc.start(now + 0.09 + i * 0.055);
+      osc.stop(now + 0.09 + i * 0.055 + 0.36);
     });
+  }
+
+  public playCoreBurst() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const pop = ctx.createOscillator();
+    const popGain = ctx.createGain();
+    pop.type = 'triangle';
+    pop.frequency.setValueAtTime(250, now);
+    pop.frequency.exponentialRampToValueAtTime(48, now + 0.3);
+    popGain.gain.setValueAtTime(0.19, now);
+    popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+    pop.connect(popGain).connect(ctx.destination);
+    pop.start(now);
+    pop.stop(now + 0.34);
+
+    [880, 1174, 1480].forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, now + 0.03 + i * 0.04);
+      gain.gain.setValueAtTime(0.07, now + 0.03 + i * 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.03 + i * 0.04 + 0.22);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + 0.03 + i * 0.04);
+      osc.stop(now + 0.03 + i * 0.04 + 0.24);
+    });
+  }
+
+  public playPartClang(pitchMul = 1) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [390 * pitchMul, 635 * pitchMul].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = i === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(freq, now);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.78, now + 0.11);
+      gain.gain.setValueAtTime(i === 0 ? 0.065 : 0.04, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.13);
+    });
+  }
+
+  public playHeavyPartThud(mass = 1.8) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const weight = Math.max(1, Math.min(2.8, mass));
+
+    // Heavy cast-brass / iron floor slam
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(108 / Math.sqrt(weight * 0.75), now);
+    sub.frequency.exponentialRampToValueAtTime(28, now + 0.22);
+    subGain.gain.setValueAtTime(0.11 * Math.min(1.6, weight * 0.7), now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    sub.connect(subGain).connect(ctx.destination);
+    sub.start(now);
+    sub.stop(now + 0.25);
+
+    // Damped metallic plate resonance
+    const plate = ctx.createOscillator();
+    const plateGain = ctx.createGain();
+    plate.type = 'triangle';
+    plate.frequency.setValueAtTime(240 / Math.sqrt(weight * 0.8), now);
+    plate.frequency.exponentialRampToValueAtTime(88, now + 0.15);
+    plateGain.gain.setValueAtTime(0.075, now);
+    plateGain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    plate.connect(plateGain).connect(ctx.destination);
+    plate.start(now);
+    plate.stop(now + 0.17);
+  }
+
+  public playHardwareClink(pitchMul = 1) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1480 * pitchMul, now);
+    osc.frequency.exponentialRampToValueAtTime(980 * pitchMul, now + 0.055);
+    gain.gain.setValueAtTime(0.026, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.065);
   }
 
   public playBossAttack() {
@@ -799,6 +1042,150 @@ class FightSynth {
     osc.start(now);
     osc.stop(now + 0.1);
   }
+
+  public playHandBump(intensity = 0.8, isBall = false) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const mag = Math.max(0.35, Math.min(1.4, intensity));
+
+    if (isBall) {
+      const boing = ctx.createOscillator();
+      const boingGain = ctx.createGain();
+      boing.type = 'triangle';
+      boing.frequency.setValueAtTime(195, now);
+      boing.frequency.exponentialRampToValueAtTime(420, now + 0.065);
+      boing.frequency.exponentialRampToValueAtTime(155, now + 0.16);
+      boingGain.gain.setValueAtTime(0.09 * mag, now);
+      boingGain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
+      boing.connect(boingGain).connect(ctx.destination);
+      boing.start(now);
+      boing.stop(now + 0.18);
+      return;
+    }
+
+    const thud = ctx.createOscillator();
+    const thudGain = ctx.createGain();
+    thud.type = 'triangle';
+    thud.frequency.setValueAtTime(165, now);
+    thud.frequency.exponentialRampToValueAtTime(68, now + 0.09);
+    thudGain.gain.setValueAtTime(0.1 * mag, now);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    thud.connect(thudGain).connect(ctx.destination);
+    thud.start(now);
+    thud.stop(now + 0.11);
+
+    const clack = ctx.createOscillator();
+    const clackGain = ctx.createGain();
+    clack.type = 'sine';
+    clack.frequency.setValueAtTime(760, now);
+    clack.frequency.exponentialRampToValueAtTime(410, now + 0.06);
+    clackGain.gain.setValueAtTime(0.055 * mag, now);
+    clackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    clack.connect(clackGain).connect(ctx.destination);
+    clack.start(now);
+    clack.stop(now + 0.075);
+  }
+
+  public playDizzy(intense = false) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const lfo = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
+    const gain = ctx.createGain();
+
+    osc.type = 'triangle';
+    const baseFreq = intense ? 520 : 450;
+    osc.frequency.setValueAtTime(baseFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(310, now + 0.36);
+
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(11.5, now);
+    lfoGain.gain.setValueAtTime(intense ? 68 : 48, now);
+    lfo.connect(lfoGain).connect(osc.frequency);
+
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(intense ? 0.068 : 0.052, now + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    lfo.start(now);
+    osc.stop(now + 0.4);
+    lfo.stop(now + 0.4);
+  }
+
+  public playNervousAlert() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const notes = [680, 920, 760, 1080];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t0 = now + idx * 0.045;
+      osc.type = idx % 2 === 0 ? 'triangle' : 'sawtooth';
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.18, t0 + 0.04);
+      gain.gain.setValueAtTime(0.055, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.06);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.065);
+    });
+  }
+
+  public playHandHop() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(340, now);
+    osc.frequency.exponentialRampToValueAtTime(760, now + 0.09);
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.12);
+  }
+
+  public playChargeTick(step: number) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    const baseF = 480 + step * 170;
+    osc.frequency.setValueAtTime(baseF, now);
+    osc.frequency.exponentialRampToValueAtTime(baseF * 1.25, now + 0.055);
+    gain.gain.setValueAtTime(0.045, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.075);
+  }
+
+  public playChargedRelease(charge: number) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const c = Math.max(0, Math.min(1, charge));
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(520 + c * 360, now);
+    osc.frequency.exponentialRampToValueAtTime(220 + c * 140, now + 0.16);
+    gain.gain.setValueAtTime(0.11 + c * 0.06, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.19);
+  }
 }
 
 function makeSpr(k: number, c: number) {
@@ -848,7 +1235,8 @@ export function PiggyDuelPlugin({
     spotIndex: 0,
     spotTotal: ROUND_PATTERNS[0].spots.length,
     pumpProgress: 0,
-    pumpTarget: initialDifficulty === 'FRENZY' ? 24 : 18,
+    pumpTarget: 3,
+    pumpHoldPct: 0,
     bellyPct: 0,
     bossActionLabel: autoStart ? ROUND_PATTERNS[0].name : 'Ready',
     dashReadyPct: 100,
@@ -863,6 +1251,10 @@ export function PiggyDuelPlugin({
     laserLabel: LASER_PROFILES.SLING_ARC.shortLabel,
     laserCurved: true,
     laserModeSetting: 'AUTO',
+    nervousPct: 0,
+    isNervous: false,
+    handChargePct: 0,
+    handStateLabel: '',
   }));
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -915,6 +1307,8 @@ export function PiggyDuelPlugin({
     reloadCompleteFlash: 0,
     dryClickFlash: 0,
     sinceLastSlotHit: 0,
+    pumpHoldTimer: 0,
+    pumpHoldMax: 4.8,
     pressureBleedFxAcc: 0,
     dashCooldown: 0,
     dashMaxCooldown: 0.65,
@@ -927,13 +1321,49 @@ export function PiggyDuelPlugin({
     lastFacing: 0,
     afterimages: [] as Afterimage[],
 
-    // Varied Targeting Laser Oscillator (Curved Slings & Straight Rails at varying speeds!)
+    // Dynamic Tap / Hold / Release Hand Mechanics (Short Hop, Power Charge, Extended Glide)
+    handHoldActive: false,
+    handHoldDuration: 0,
+    handCharge: 0,
+    handChargeStep: 0,
+    handHopY: 0,
+    handHopVy: 0,
+    handOffsetX: 0,
+    handOffsetY: 0,
+    handTiltDeg: 0,
+    handScaleX: 1,
+    handScaleY: 1,
+    handGlideTimer: 0,
+    handGlideVx: 0,
+    handGlideVy: 0,
+    handChargeTrailAcc: 0,
+    dashHolding: false,
+    dashGlideFuel: 0,
+    handColCooldown: 0,
+    handScrapeFxAcc: 0,
+    handBounceVx: 0,
+    handBounceVy: 0,
+    handShieldFlash: 0,
+    handContactX: 0,
+    handContactY: 0,
+    handContactNx: 0,
+    handContactNy: -1,
+    dizzyTimer: 0,
+    dizzyLevel: 0,
+    dizzyPhase: 0,
+
+    // Dynamic Deterministic Low-to-Top Hold Targeting Laser (Curved Slings & Straight Rails)
     laserModeSetting: 'AUTO' as LaserModeSetting,
     laserStyle: 'SLING_ARC' as LaserStyleId,
     laserIndex: 0,
-    laserSwitchTimer: 4.8,
+    laserSwitchTimer: 5.0,
+    laserElev: 0,
+    laserGrow: 0,
+    laserFadeTimer: 0,
+    laserHoldSnapshot: 0,
+    laserIgniteFlash: 0,
     slingPhase: 0,
-    slingSubPhase: 1.1,
+    slingSubPhase: 0,
     slingSpeed: 2.65,
     slingTargetSpeed: 2.65,
     slingSubSpeed: 4.2,
@@ -943,7 +1373,7 @@ export function PiggyDuelPlugin({
     slingPowerBias: 0,
     slingTargetPowerBias: 0,
     slingMorphTimer: 1.8,
-    slingSeed: 0.65,
+    slingSeed: 0,
     slingLocked: false,
 
     // Boss Piggybank Pump-to-Explode & Pattern Movement state
@@ -962,9 +1392,12 @@ export function PiggyDuelPlugin({
     primed: false,
     stepNo: 0,
     pumpProgress: 0,
-    pumpTarget: 14,
-    bossAction: 'PATTERN_STOP' as BossAction,
+    pumpTarget: 3,
+    bossAction: 'WALK' as BossAction,
     bossTimer: 1.0,
+    walkTimer: 0,
+    walkTurnPause: 0,
+    playerIdleTimer: 0,
     bossFlash: 0,
     hurtTimer: 0,
     hurtDir: 1,
@@ -977,8 +1410,17 @@ export function PiggyDuelPlugin({
     ballVx: 0,
     ballVy: 0,
     ballTimer: 0,
+    ballSquashContact: 0,
     stopsSinceBall: 0,
     ballTriggerStops: 3,
+
+    // Nervous state & volatility
+    nervousLevel: 0,
+    nervousPanicTimer: 0,
+    nervousSteamAcc: 0,
+    nervousDartTimer: 0,
+    nervousJitterX: 0,
+    textureOn: true,
 
     // Pattern waypoint navigation
     patternIndex: 0,
@@ -1024,16 +1466,27 @@ export function PiggyDuelPlugin({
     spSx: makeSpr(150, 5),
     spLean: makeSpr(70, 3.2),
     spLand: makeSpr(175, 11),
+    spBallSq: makeSpr(320, 8.2),
+    spBallWall: makeSpr(320, 8.2),
 
     // Canvas FX pools
     projectiles: [] as Projectile[],
     particles: [] as CanvasParticle[],
     floaters: [] as CanvasFloater[],
     piggyTrail: [] as DualTrailPoint[],
+    ballAfterimages: [] as BallAfterimage[],
     landingRings: [] as LandingRing[],
     impactFlashes: [] as ImpactFlash[],
     droppingCoins: [] as DroppingCoin[],
     slotIntakePulses: [] as SlotIntakePulse[],
+    shockwaves: [] as CanvasShockwave[],
+    debrisItems: [] as MechanicalDebris[],
+    disassemblyParts: [] as DisassemblyPart[],
+    breakMax: 2.35,
+    breakPx: WORLD_W * 0.34,
+    breakPy: 0,
+    breakDir: 1,
+    breakStage: 0,
     shakeTimer: 0,
     hitStop: 0,
 
@@ -1055,8 +1508,29 @@ export function PiggyDuelPlugin({
     tail: null as SVGGElement | null,
     head: null as SVGGElement | null,
     tailMount: null as SVGGElement | null,
+    tailEjectWrap: null as SVGGElement | null,
     slotFollow: null as SVGGElement | null,
+    slotEjectWrap: null as SVGGElement | null,
     jetFollow: null as SVGGElement | null,
+    jetTuckWrap: null as SVGGElement | null,
+    topScrewWrap: null as SVGGElement | null,
+    leftPauldron: null as SVGGElement | null,
+    rightPauldronWrap: null as SVGGElement | null,
+    leftSocket: null as SVGPathElement | null,
+    rightSocket: null as SVGGElement | null,
+    leftArmTuck: null as SVGGElement | null,
+    rightArmTuck: null as SVGGElement | null,
+    torsoChestWrap: null as SVGGElement | null,
+    torsoBellyWrap: null as SVGGElement | null,
+    torsoPelvisWrap: null as SVGGElement | null,
+    leg0Wrap: null as SVGGElement | null,
+    leg1Wrap: null as SVGGElement | null,
+    piggyInnerCore: null as SVGGElement | null,
+    coreGearA: null as SVGGElement | null,
+    coreGearB: null as SVGGElement | null,
+    coreGearC: null as SVGGElement | null,
+    topScrewShank: null as SVGGElement | null,
+    ballShellOverlay: null as SVGGElement | null,
     jetGimbal: null as SVGGElement | null,
     jetFlame: null as SVGGElement | null,
     jetFlameBody: null as SVGGElement | null,
@@ -1074,6 +1548,8 @@ export function PiggyDuelPlugin({
     legs: [] as { t: SVGGElement; s: SVGGElement; f: SVGGElement }[],
     balloonPaths: [] as { el: SVGPathElement; tok: string[] }[],
     balloonEllipses: [] as { el: SVGEllipseElement; cx: number; cy: number; rx: number; ry: number; ang: number }[],
+    nervousColorMatrix: null as SVGFEColorMatrixElement | null,
+    nervousRedGlow: null as SVGFEDropShadowElement | null,
   });
 
   useEffect(() => {
@@ -1083,6 +1559,10 @@ export function PiggyDuelPlugin({
   useEffect(() => {
     simRef.current.difficulty = difficulty;
   }, [difficulty]);
+
+  useEffect(() => {
+    simRef.current.textureOn = textureOn;
+  }, [textureOn]);
 
   useEffect(() => {
     if (synthRef.current) synthRef.current.muted = muted;
@@ -1379,9 +1859,219 @@ export function PiggyDuelPlugin({
     }
   };
 
+  const getBallWorldCenterY = () => {
+    const s = simRef.current;
+    const m = s.ballMorph;
+    const rBall = getBallSvgRadius(s.bellyLevel);
+    const ballIdealDropY = 911 - (BALL_CY + rBall);
+    const normalCenterY = FLOOR_Y + s.py + (545 - 911) * PIGGY_SCALE;
+    const ballCenterY = FLOOR_Y + s.py + (BALL_CY + ballIdealDropY - 911) * PIGGY_SCALE;
+    return normalCenterY * (1 - m) + ballCenterY * m;
+  };
+
+  const moveHandWithCollision = useCallback((desiredCx: number, desiredCy: number, dt: number, fromPointer = false) => {
+    const s = simRef.current;
+    const clampedDestX = Math.max(24, Math.min(WORLD_W - 24, desiredCx));
+    const clampedDestY = Math.max(24, Math.min(WORLD_H - 24, desiredCy));
+
+    const hasPiggyBody =
+      (s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') &&
+      !(s.bossAction === 'BREAKING' && s.breakStage >= 1);
+
+    if (!hasPiggyBody) {
+      s.cx = clampedDestX;
+      s.cy = clampedDestY;
+      return;
+    }
+
+    const handR = 30;
+    const inBallMode = s.ballMorph > 0.35;
+    const ballR = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE;
+    const bodyRx = inBallMode ? ballR * 0.96 : 62 + s.bellyLevel * 28;
+    const bodyRy = inBallMode ? ballR * 0.96 : 84 + s.bellyLevel * 22;
+    const ex = bodyRx + handR;
+    const ey = bodyRy + handR;
+    const pyCenter = getBallWorldCenterY();
+
+    const startX = s.cx;
+    const startY = s.cy;
+    const totalDx = clampedDestX - startX;
+    const totalDy = clampedDestY - startY;
+    const totalDist = Math.hypot(totalDx, totalDy);
+    const steps = Math.max(1, Math.min(18, Math.ceil(totalDist / 16)));
+    const stepDx = totalDx / steps;
+    const stepDy = totalDy / steps;
+
+    let curX = startX;
+    let curY = startY;
+    let collided = false;
+    let hitNx = 0;
+    let hitNy = -1;
+
+    for (let i = 0; i < steps; i++) {
+      curX += stepDx;
+      curY += stepDy;
+      const hx = curX + s.handOffsetX;
+      const hy = curY + s.handHopY + s.handOffsetY;
+      const nx = (hx - s.px) / ex;
+      const ny = (hy - pyCenter) / ey;
+      const d2 = nx * nx + ny * ny;
+      if (d2 < 1) {
+        collided = true;
+        if (d2 < 0.0001) {
+          const fbDx = startX - s.px;
+          const fbDy = startY - pyCenter;
+          const fbLen = Math.hypot(fbDx, fbDy) || 1;
+          hitNx = fbDx / fbLen;
+          hitNy = fbDy / fbLen;
+          curX = s.px + hitNx * ex * 1.004 - s.handOffsetX;
+          curY = pyCenter + hitNy * ey * 1.004 - s.handHopY - s.handOffsetY;
+        } else {
+          const rawNx = (hx - s.px) / (ex * ex);
+          const rawNy = (hy - pyCenter) / (ey * ey);
+          const nLen = Math.hypot(rawNx, rawNy) || 1;
+          hitNx = rawNx / nLen;
+          hitNy = rawNy / nLen;
+          const invD = 1 / Math.sqrt(d2);
+          const pushedHx = s.px + (hx - s.px) * invD * 1.005;
+          const pushedHy = pyCenter + (hy - pyCenter) * invD * 1.005;
+          curX = pushedHx - s.handOffsetX;
+          curY = pushedHy - s.handHopY - s.handOffsetY;
+        }
+      }
+    }
+
+    s.cx = Math.max(24, Math.min(WORLD_W - 24, curX));
+    s.cy = Math.max(24, Math.min(WORLD_H - 24, curY));
+
+    if (!collided) return;
+
+    // Deflect active dash, glide, and hop velocities cleanly off the piggy surface
+    if (s.dashTimer > 0) {
+      const dotDash = s.dashVx * hitNx + s.dashVy * hitNy;
+      if (dotDash < 0) {
+        s.dashVx = (s.dashVx - 1.65 * dotDash * hitNx) * 0.72;
+        s.dashVy = (s.dashVy - 1.65 * dotDash * hitNy) * 0.72;
+        s.dashTimer = Math.min(s.dashTimer, 0.06);
+      }
+    }
+    if (s.handGlideTimer > 0) {
+      const dotGlide = s.handGlideVx * hitNx + s.handGlideVy * hitNy;
+      if (dotGlide < 0) {
+        s.handGlideVx = (s.handGlideVx - 1.7 * dotGlide * hitNx) * 0.78;
+        s.handGlideVy = (s.handGlideVy - 1.7 * dotGlide * hitNy) * 0.78;
+      }
+    }
+    if (s.handHopVy !== 0 && s.handHopVy * hitNy < 0) {
+      s.handHopVy = -s.handHopVy * 0.55;
+    }
+
+    const contactX = s.px + hitNx * bodyRx;
+    const contactY = pyCenter + hitNy * bodyRy;
+    s.handContactX = contactX;
+    s.handContactY = contactY;
+    s.handContactNx = hitNx;
+    s.handContactNy = hitNy;
+    s.handShieldFlash = 0.28;
+
+    const handMoveSpd = totalDist / Math.max(dt, 0.016);
+    const piggySpd = Math.hypot(s.realVx, s.vAlt * PIGGY_SCALE);
+    const impactSpeed = Math.min(1400, handMoveSpd * (fromPointer ? 0.65 : 1) + piggySpd);
+    const fxColor = inBallMode ? '#38BDF8' : s.nervousLevel > 0.4 ? '#EF4444' : '#F59E0B';
+
+    if (s.handColCooldown <= 0) {
+      s.handColCooldown = 0.115;
+      const intense = impactSpeed > 320 || s.dashTimer > 0 || s.handGlideTimer > 0 || inBallMode;
+      spawnCollisionFx(contactX, contactY, hitNx, hitNy, fxColor, intense);
+      s.landingRings.push({
+        x: contactX,
+        y: contactY,
+        rx: 12,
+        maxRx: intense ? 64 : 44,
+        life: 0.24,
+        maxLife: 0.24,
+        color: inBallMode ? 'rgba(56, 189, 248, 0.62)' : 'rgba(245, 158, 11, 0.62)',
+      });
+
+      const kick = Math.min(22, 7 + impactSpeed * 0.02);
+      s.handBounceVx = hitNx * (150 + Math.min(340, impactSpeed * 0.36));
+      s.handBounceVy = hitNy * (150 + Math.min(340, impactSpeed * 0.36));
+      s.handOffsetX += hitNx * kick;
+      s.handOffsetY += hitNy * kick;
+      s.handScaleX = Math.abs(hitNx) > Math.abs(hitNy) ? 0.78 : 1.22;
+      s.handScaleY = Math.abs(hitNx) > Math.abs(hitNy) ? 1.22 : 0.78;
+
+      // Tactile piggy armor/balloon response
+      s.bellyVel += 0.11 + Math.min(0.16, impactSpeed * 0.00022);
+      s.bossFlash = Math.max(s.bossFlash, 0.08);
+      s.hurtTimer = Math.max(s.hurtTimer, 0.11);
+      s.hurtDir = hitNx >= 0 ? -1 : 1;
+      if (inBallMode) {
+        s.spBallWall.v += 2.1;
+        s.ballSpin += hitNx * 85;
+      }
+      if (intense) {
+        s.shakeTimer = Math.max(s.shakeTimer, 0.075);
+      }
+
+      // Trigger or extend Dizzy State upon solid hand-to-piggy collision
+      const wasDizzy = s.dizzyTimer;
+      const dizzyAdd = intense ? 0.55 : 0.3;
+      const dizzyFloor = intense ? 1.85 : 1.2;
+      s.dizzyTimer = Math.min(2.4, Math.max(s.dizzyTimer + dizzyAdd, dizzyFloor));
+      s.spLean.v += hitNx * (intense ? 38 : 22);
+      if (wasDizzy <= 0.12 || intense) {
+        const starBaseY = pyCenter - bodyRy * 0.85;
+        for (let di = 0; di < (intense ? 5 : 3); di++) {
+          const sa = (Math.PI * 2 * di) / (intense ? 5 : 3) + Math.random() * 0.5;
+          s.particles.push({
+            x: s.px + Math.cos(sa) * 28,
+            y: starBaseY + Math.sin(sa) * 10,
+            vx: Math.cos(sa) * (95 + Math.random() * 80) + hitNx * 40,
+            vy: -95 - Math.random() * 90,
+            r: 4.5 + Math.random() * 2.2,
+            color: di % 2 === 0 ? '#FACC15' : '#FB923C',
+            life: 0.42,
+            maxLife: 0.42,
+            gravity: 240,
+            kind: 'gleam',
+            rot: Math.random() * 120,
+            vrot: (di % 2 === 0 ? 1 : -1) * 340,
+            drag: 2.5,
+          });
+        }
+        if (wasDizzy <= 0.12) {
+          spawnFloater(s.px, starBaseY - 24, 'DIZZY!', '#D97706', 22);
+        }
+        synthRef.current?.playDizzy(intense);
+      }
+
+      synthRef.current?.playHandBump(Math.min(1.3, 0.45 + impactSpeed / 700), inBallMode);
+    } else if (s.handScrapeFxAcc >= 0.045) {
+      s.handScrapeFxAcc = 0;
+      const tangX = -hitNy;
+      const tangY = hitNx;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      s.particles.push({
+        x: contactX + (Math.random() - 0.5) * 8,
+        y: contactY + (Math.random() - 0.5) * 8,
+        vx: hitNx * 90 + tangX * side * (110 + Math.random() * 110),
+        vy: hitNy * 90 + tangY * side * (110 + Math.random() * 110) - 30,
+        r: 2.3 + Math.random() * 1.8,
+        color: Math.random() < 0.4 ? '#FEF08A' : fxColor,
+        life: 0.2,
+        maxLife: 0.2,
+        gravity: 420,
+        kind: 'dot',
+        drag: 3,
+      });
+    }
+  }, []);
+
   const getSlotHolePos = () => {
     const s = simRef.current;
-    const aS = Math.min(1.3, s.bellyGoal + s.ballMorph * 0.42);
+    const m = s.ballMorph;
+    const aS = Math.min(1.3, s.bellyGoal + m * 0.25);
     const sgS = 150 + 70 * aS;
     const gS = 0.9 * aS;
     const dxS = 545 - 560;
@@ -1390,14 +2080,19 @@ export function PiggyDuelPlugin({
     const slotOffX = dxS * kS;
     const slotOffY = dyS * kS;
 
-    const baseRelX = (512 + slotOffX - 550) * PIGGY_SCALE * (s.dir > 0 ? -1 : 1);
-    const baseRelY = (348 + slotOffY - 545) * PIGGY_SCALE;
-    const screenRad = (s.dir > 0 ? -1 : 1) * ((s.ballAngle * s.ballMorph * Math.PI) / 180);
+    const normalRelX = 512 + slotOffX - 550;
+    const normalRelY = 348 + slotOffY - 545;
+    const rBall = getBallSvgRadius(s.bellyLevel);
+    const ballRelX = -32;
+    const ballRelY = -rBall * 0.54;
+    const baseRelX = (normalRelX * (1 - m) + ballRelX * m) * PIGGY_SCALE * (s.dir > 0 ? -1 : 1);
+    const baseRelY = (normalRelY * (1 - m) + ballRelY * m) * PIGGY_SCALE;
+    const screenRad = (s.dir > 0 ? -1 : 1) * ((s.ballAngle * m * Math.PI) / 180);
     const cosA = Math.cos(screenRad);
     const sinA = Math.sin(screenRad);
     const rotX = baseRelX * cosA - baseRelY * sinA;
     const rotY = baseRelX * sinA + baseRelY * cosA;
-    const centerY = FLOOR_Y + s.py + (545 + 46 * s.ballMorph - 911) * PIGGY_SCALE;
+    const centerY = getBallWorldCenterY();
     return {
       x: s.px + rotX,
       y: centerY + rotY,
@@ -1405,46 +2100,92 @@ export function PiggyDuelPlugin({
   };
 
   // Shared live trajectory solver supporting both curved sling arcs and non-curved straight laser beams
+  // Deterministic, predictive & dynamic: starts low on press, sweeps through predicted moving slot, and climbs to top!
   const getSlingLaunchState = () => {
     const s = simRef.current;
     const profile = LASER_PROFILES[s.laserStyle];
+    const handX = s.cx + s.handOffsetX;
+    const handY = s.cy + s.handHopY + s.handOffsetY;
     const slot = getSlotHolePos();
-    const dxRaw = slot.x - s.cx;
-    const dyRaw = slot.y - s.cy;
-    const dist = Math.hypot(dxRaw, dyRaw);
+    const charge = s.handCharge;
+    const rawElev = Math.max(0, Math.min(1, s.laserElev));
+    const elev = 0.42 * rawElev + 0.58 * (rawElev * rawElev * (3 - 2 * rawElev));
 
-    let baseAngle = Math.atan2(dyRaw, dxRaw);
-    let baseSpeed = profile.straightSpeed;
+    const predictSlot = (estT: number) => {
+      const t = Math.max(0, Math.min(0.42, estT));
+      if (s.bossAction === 'BOUNCY_BALL') {
+        const gBall = 1740 + s.nervousLevel * 320;
+        let ix = slot.x + s.ballVx * t;
+        if (ix < MIN_X) ix = MIN_X + (MIN_X - ix);
+        else if (ix > MAX_X) ix = MAX_X - (ix - MAX_X);
+        let iy = slot.y + s.ballVy * t + 0.5 * gBall * t * t;
+        if (iy > FLOOR_Y - 58) iy = FLOOR_Y - 58 - (iy - (FLOOR_Y - 58)) * 0.65;
+        return {
+          x: Math.max(MIN_X - 24, Math.min(MAX_X + 24, ix)),
+          y: Math.max(82, Math.min(FLOOR_Y - 48, iy)),
+        };
+      }
+      const pvx = s.bossAction === 'PATTERN_STOP' ? 0 : s.realVx;
+      const pvy = s.bossAction === 'PATTERN_STOP' || s.bossAction === 'WALK' ? 0 : -s.vAlt * PIGGY_SCALE;
+      return {
+        x: Math.max(MIN_X - 24, Math.min(MAX_X + 24, slot.x + pvx * t)),
+        y: Math.max(86, Math.min(FLOOR_Y - 48, slot.y + pvy * t)),
+      };
+    };
+
+    const dist0 = Math.hypot(slot.x - handX, slot.y - handY);
+    const estT = profile.curved
+      ? (0.28 + elev * 0.24 + Math.min(0.2, dist0 / 2400)) * profile.flightScale
+      : dist0 / Math.max(700, profile.straightSpeed * (0.92 + elev * 0.42));
+    const intercept = predictSlot(estT);
+
+    // Low-to-Top elevation curve anchored cleanly so mid-hold (~48%) sweeps accurately through the predicted chest slot
+    const lowY = Math.min(FLOOR_Y - 12, intercept.y + 168);
+    const topY = Math.max(68, Math.min(220, intercept.y - 220));
+    const targetY =
+      elev <= 0.48
+        ? lowY + (intercept.y - lowY) * (elev / 0.48)
+        : intercept.y + (topY - intercept.y) * ((elev - 0.48) / 0.52);
+    const targetX = intercept.x;
+
+    const dxRaw = targetX - handX;
+    const dyTarget = targetY - handY;
+    const dist = Math.hypot(dxRaw, dyTarget);
+
+    let baseAngle = Math.atan2(dyTarget, Math.abs(dxRaw) < 4 ? (s.facing < 0 ? 4 : -4) : dxRaw);
+    let baseSpeed = profile.straightSpeed * (0.9 + elev * 0.44);
     const gravity = profile.gravity;
 
     if (profile.curved) {
-      // Smoothly blend between overhead drop sling and side/underneath rainbow slingshot lob
-      const lobBlend = Math.max(0, Math.min(1, (160 - dyRaw) / 240));
-      const flightT = (0.31 + lobBlend * 0.28 + Math.min(0.3, dist / 2300)) * profile.flightScale;
-      const idealVx = dxRaw / flightT;
-      const idealVy = (dyRaw - 0.5 * gravity * flightT * flightT) / flightT;
+      // Adaptive flight time guarantees curved coins clear shoulder armor and descend cleanly into the slot
+      const lobBlend = Math.max(0, Math.min(1, (160 - dyTarget) / 260));
+      const baseFlightT =
+        (0.28 + elev * 0.23 + lobBlend * 0.1 + Math.min(0.22, dist / 2400)) *
+        profile.flightScale *
+        (1 - charge * 0.12);
+      const minDropT =
+        elev >= 0.28
+          ? Math.sqrt((2 * Math.max(36, -dyTarget + 88)) / Math.max(400, gravity))
+          : 0.16;
+      const flightT = Math.max(baseFlightT, minDropT);
+      const idealVx = dxRaw / Math.max(0.14, flightT);
+      const idealVy = (dyTarget - 0.5 * gravity * flightT * flightT) / Math.max(0.14, flightT);
       baseAngle = Math.atan2(idealVy, idealVx);
-      baseSpeed = Math.min(1680, Math.hypot(idealVx, idealVy));
+      baseSpeed = Math.min(2120, Math.hypot(idealVx, idealVy));
     }
 
-    // Organic randomized sweep across angle & launch speed/power
-    const sweepAngle =
-      Math.sin(s.slingPhase) * s.slingAngleSpan +
-      Math.sin(s.slingSubPhase + s.slingSeed) * (s.slingAngleSpan * 0.32);
-    const sweepPower =
-      1 +
-      Math.cos(s.slingPhase * 0.82 + s.slingSeed * 1.4) * profile.powerSwing +
-      s.slingPowerBias * (profile.curved ? 1 : 0.45);
-
-    const launchAngle = baseAngle + sweepAngle;
-    const launchSpeed = Math.max(260, baseSpeed * sweepPower);
+    // Dynamic deterministic responsiveness from hand vertical hop & horizontal glide (zero random logic)
+    const hopDynamicBend = Math.max(-0.16, Math.min(0.16, s.handHopVy * -0.0002));
+    const glideDynamicBend = Math.max(-0.16, Math.min(0.16, s.velX * 0.00012)) * (profile.curved ? 1 : 0.45);
+    const launchAngle = baseAngle + hopDynamicBend + glideDynamicBend;
+    const launchSpeed = Math.max(290, baseSpeed * (1 + charge * (profile.curved ? 0.08 : 0.18)));
     const vx = Math.cos(launchAngle) * launchSpeed + (profile.curved ? s.velX * 0.06 : 0);
-    const vy = Math.sin(launchAngle) * launchSpeed;
+    const vy = Math.sin(launchAngle) * launchSpeed + s.handHopVy * 0.12;
     const launchFacing = vx >= 0 ? 1 : -1;
 
     return {
-      spawnX: s.cx + Math.cos(launchAngle) * 10,
-      spawnY: s.cy + Math.sin(launchAngle) * 6 + 6,
+      spawnX: handX + Math.cos(launchAngle) * 12,
+      spawnY: handY + Math.sin(launchAngle) * 8 + 6,
       vx,
       vy,
       gravity,
@@ -1453,13 +2194,22 @@ export function PiggyDuelPlugin({
       baseAngle,
       facing: launchFacing,
       slot,
+      charge,
+      elev,
+      targetX,
+      targetY,
+      interceptX: intercept.x,
+      interceptY: intercept.y,
     };
   };
 
   const setupRound = useCallback((roundNum: number, resetRun: boolean) => {
     const s = simRef.current;
-    const frenzyAdd = s.difficulty === 'FRENZY' ? 6 : 0;
-    const targetCoins = 18 + (roundNum - 1) * 5 + frenzyAdd;
+    const targetCoins = 3;
+    const holdWindow =
+      s.difficulty === 'FRENZY'
+        ? Math.max(2.6, 3.8 - (roundNum - 1) * 0.16)
+        : Math.max(3.2, 4.8 - (roundNum - 1) * 0.18);
 
     if (resetRun) {
       s.score = 0;
@@ -1500,9 +2250,14 @@ export function PiggyDuelPlugin({
     s.pumpProgress = 0;
     s.pumpTarget = targetCoins;
     s.sinceLastSlotHit = 0;
+    s.pumpHoldMax = holdWindow;
+    s.pumpHoldTimer = 0;
     s.pressureBleedFxAcc = 0;
     s.bossAction = 'PATTERN_STOP';
     s.bossTimer = stopDur;
+    s.walkTimer = 0;
+    s.walkTurnPause = 0;
+    s.playerIdleTimer = 0;
     s.bossFlash = 0;
     s.hurtTimer = 0;
     s.breakTimer = 0;
@@ -1512,8 +2267,14 @@ export function PiggyDuelPlugin({
     s.ballVx = 0;
     s.ballVy = 0;
     s.ballTimer = 0;
+    s.ballSquashContact = 0;
     s.stopsSinceBall = 0;
     s.ballTriggerStops = s.difficulty === 'FRENZY' ? 2 : 3;
+    s.nervousLevel = 0;
+    s.nervousPanicTimer = 0;
+    s.nervousSteamAcc = 0;
+    s.nervousDartTimer = 0;
+    s.nervousJitterX = 0;
     s.swallowTimer = 0;
     s.slotGlowTimer = 0;
     s.slotReceiveTilt = 0;
@@ -1530,8 +2291,36 @@ export function PiggyDuelPlugin({
     s.bellyVel = 0.04;
     s.spLand.x = 0;
     s.spLand.v = 0;
+    s.spBallSq.x = 0;
+    s.spBallSq.v = 0;
+    s.spBallWall.x = 0;
+    s.spBallWall.v = 0;
     s.dashCooldown = 0;
     s.dashTimer = 0;
+    s.handHoldActive = false;
+    s.handHoldDuration = 0;
+    s.handCharge = 0;
+    s.handChargeStep = 0;
+    s.handHopY = 0;
+    s.handHopVy = 0;
+    s.handOffsetX = 0;
+    s.handOffsetY = 0;
+    s.handTiltDeg = 0;
+    s.handScaleX = 1;
+    s.handScaleY = 1;
+    s.handGlideTimer = 0;
+    s.handGlideVx = 0;
+    s.handGlideVy = 0;
+    s.dashHolding = false;
+    s.dashGlideFuel = 0;
+    s.handColCooldown = 0;
+    s.handScrapeFxAcc = 0;
+    s.handBounceVx = 0;
+    s.handBounceVy = 0;
+    s.handShieldFlash = 0;
+    s.dizzyTimer = 0;
+    s.dizzyLevel = 0;
+    s.dizzyPhase = 0;
     s.revolverMax = REVOLVER_CHAMBERS;
     s.revolverChambers = REVOLVER_CHAMBERS;
     s.cylinderAngle = 0;
@@ -1547,19 +2336,56 @@ export function PiggyDuelPlugin({
     s.floaters = [];
     s.afterimages = [];
     s.piggyTrail = [];
+    s.ballAfterimages = [];
     s.landingRings = [];
     s.impactFlashes = [];
     s.droppingCoins = [];
     s.slotIntakePulses = [];
+    s.shockwaves = [];
+    s.debrisItems = [];
+    s.disassemblyParts = [];
+    s.breakStage = 0;
+    for (const partEl of [
+      s.topScrewWrap,
+      s.leftPauldron,
+      s.rightPauldronWrap,
+      s.slotEjectWrap,
+      s.leftArmTuck,
+      s.rightArmTuck,
+      s.tailEjectWrap,
+      s.jetTuckWrap,
+      s.torsoChestWrap,
+      s.torsoBellyWrap,
+      s.torsoPelvisWrap,
+      s.leg0Wrap,
+      s.leg1Wrap,
+    ]) {
+      if (!partEl) continue;
+      partEl.setAttribute('transform', '');
+      partEl.style.opacity = '1';
+    }
+    if (s.piggyInnerCore) s.piggyInnerCore.setAttribute('opacity', '0');
+    if (s.topScrewShank) s.topScrewShank.setAttribute('opacity', '0');
+    if (s.leftSocket) s.leftSocket.style.opacity = '1';
+    if (s.rightSocket) s.rightSocket.style.opacity = '1';
+    if (s.piggyPos) {
+      s.piggyPos.style.opacity = '1';
+      s.piggyPos.style.filter = '';
+    }
     const initProfile =
       s.laserModeSetting === 'AUTO'
         ? LASER_PROFILES[LASER_STYLE_ORDER[(roundNum - 1) % LASER_STYLE_ORDER.length]]
         : LASER_PROFILES[s.laserModeSetting];
     s.laserStyle = initProfile.id;
     s.laserIndex = LASER_STYLE_ORDER.indexOf(initProfile.id);
-    s.laserSwitchTimer = 4.6;
+    s.laserSwitchTimer = 5.0;
+    s.laserElev = 0;
+    s.laserGrow = 0;
+    s.laserFadeTimer = 0;
+    s.laserHoldSnapshot = 0;
+    s.laserIgniteFlash = 0;
     s.slingPhase = 0;
-    s.slingSubPhase = Math.random() * Math.PI * 2;
+    s.slingSubPhase = 0;
     s.slingSpeed = initProfile.sweepRate;
     s.slingTargetSpeed = initProfile.sweepRate;
     s.slingSubSpeed = initProfile.subRate;
@@ -1568,8 +2394,8 @@ export function PiggyDuelPlugin({
     s.slingTargetAngleSpan = initProfile.angleSpan;
     s.slingPowerBias = 0;
     s.slingTargetPowerBias = 0;
-    s.slingMorphTimer = 1.45;
-    s.slingSeed = Math.random() * Math.PI * 2;
+    s.slingMorphTimer = 1.5;
+    s.slingSeed = 0;
     s.slingLocked = false;
     s.phase = 'PLAYING';
 
@@ -1584,6 +2410,7 @@ export function PiggyDuelPlugin({
       spotTotal: pat.spots.length,
       pumpProgress: 0,
       pumpTarget: targetCoins,
+      pumpHoldPct: 0,
       bellyPct: 0,
       bossActionLabel: `Pattern: ${pat.name}`,
       dashReadyPct: 100,
@@ -1598,6 +2425,10 @@ export function PiggyDuelPlugin({
       laserLabel: initProfile.shortLabel,
       laserCurved: initProfile.curved,
       laserModeSetting: s.laserModeSetting,
+      nervousPct: 0,
+      isNervous: false,
+      handChargePct: 0,
+      handStateLabel: '',
     }));
   }, []);
 
@@ -1620,6 +2451,7 @@ export function PiggyDuelPlugin({
   const cycleLaserMode = useCallback(() => {
     const modes: LaserModeSetting[] = ['AUTO', ...LASER_STYLE_ORDER];
     const s = simRef.current;
+    s.playerIdleTimer = 0;
     const curIdx = modes.indexOf(s.laserModeSetting);
     const nextMode = modes[(curIdx + 1) % modes.length];
     s.laserModeSetting = nextMode;
@@ -1654,6 +2486,7 @@ export function PiggyDuelPlugin({
 
   const startRevolverReload = useCallback((playTick = true) => {
     const s = simRef.current;
+    s.playerIdleTimer = 0;
     if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') return;
     if (s.isReloading || s.revolverChambers >= s.revolverMax) return;
     s.isReloading = true;
@@ -1666,18 +2499,18 @@ export function PiggyDuelPlugin({
 
   // Hand/Cursor Hit State: Revolver-Gated Sling-Laser Coin Throw (https://i.imgur.com/XE4l8eT.png)
   const throwCoin = useCallback(
-    (fromHold = false) => {
+    (fromHold = false, chargePower = 0) => {
       const s = simRef.current;
       synthRef.current?.unlock();
-      if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') return;
-      if (s.throwCooldown > 0) return;
+      if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') return false;
+      if (s.throwCooldown > 0) return false;
 
       if (s.isReloading) {
         if (!fromHold) {
           s.dryClickFlash = 0.22;
           synthRef.current?.playDryClick();
         }
-        return;
+        return false;
       }
 
       if (s.revolverChambers <= 0) {
@@ -1686,46 +2519,52 @@ export function PiggyDuelPlugin({
           synthRef.current?.playDryClick();
         }
         startRevolverReload(false);
-        return;
+        return false;
       }
 
+      const pwr = Math.max(0, Math.min(1, chargePower));
       const launch = getSlingLaunchState();
       s.revolverChambers -= 1;
       s.cylinderTargetAngle += (Math.PI * 2) / s.revolverMax;
       s.throwCooldown = s.throwCooldownMax;
       s.throwAnimTimer = 0.13;
       s.facing = -launch.facing;
-      synthRef.current?.playThrow();
+      if (pwr < 0.15) {
+        synthRef.current?.playThrow();
+      }
 
+      const pumpValue = 1.0;
       s.projectiles.push({
         kind: 'thrown_coin',
         x: launch.spawnX,
         y: launch.spawnY,
         vx: launch.vx,
         vy: launch.vy,
-        r: 21,
+        r: 21 + pwr * 6,
         rot: 0,
-        vrot: launch.facing * 680,
-        life: 2.0,
-        maxLife: 2.0,
+        vrot: launch.facing * (680 + pwr * 420),
+        life: 2.0 + pwr * 0.25,
+        maxLife: 2.0 + pwr * 0.25,
         gravity: launch.gravity,
         bounces: 0,
         armorHitCooldown: 0,
+        power: pwr,
+        pumpValue,
+        missedHandled: false,
       });
-
-      // Subtle playful sling twist after firing a chamber
-      s.slingTargetPowerBias = Math.max(-0.24, Math.min(0.24, s.slingTargetPowerBias + (Math.random() - 0.5) * 0.16));
 
       // Revolver empties -> swing out cylinder & sweep orbit threshold to reload
       if (s.revolverChambers <= 0) {
         startRevolverReload(true);
       }
+      return true;
     },
     [startRevolverReload]
   );
 
-  const performDash = useCallback(() => {
+  const performDash = useCallback((extendGlide = false) => {
     const s = simRef.current;
+    s.playerIdleTimer = 0;
     synthRef.current?.unlock();
     if (s.phase !== 'PLAYING') return;
     if (s.dashCooldown > 0) return;
@@ -1741,10 +2580,115 @@ export function PiggyDuelPlugin({
     s.dashTimer = 0.16;
     s.dashVx = Math.cos(ang) * 1950;
     s.dashVy = Math.sin(ang) * 1950;
+    s.handHopVy = Math.min(s.handHopVy, -380);
+    s.handScaleX = 1.2;
+    s.handScaleY = 0.84;
+    if (extendGlide) {
+      s.dashHolding = true;
+      s.dashGlideFuel = 0.65;
+    }
     s.throwAnimTimer = 0.14;
     synthRef.current?.playDash();
     spawnBurst(s.cx, s.cy, '#38BDF8', 10, 260, 0);
   }, []);
+
+  // Tap vs. Hold vs. Release Hand Controller
+  const startHandPress = useCallback(() => {
+    const s = simRef.current;
+    s.playerIdleTimer = 0;
+    synthRef.current?.unlock();
+    if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') return;
+    if (s.isReloading) {
+      s.dryClickFlash = 0.22;
+      synthRef.current?.playDryClick();
+      return;
+    }
+    if (s.revolverChambers <= 0) {
+      s.dryClickFlash = 0.22;
+      synthRef.current?.playDryClick();
+      startRevolverReload(false);
+      return;
+    }
+    if (s.handHoldActive) return;
+    s.handHoldActive = true;
+    s.handHoldDuration = 0;
+    s.laserElev = 0;
+    s.laserGrow = 0;
+    s.laserFadeTimer = 0;
+    s.laserHoldSnapshot = 0;
+    s.laserIgniteFlash = 1.0;
+    s.handCharge = 0;
+    s.handChargeStep = 0;
+    s.handScaleX = 1.15;
+    s.handScaleY = 0.86;
+  }, [startRevolverReload]);
+
+  const releaseHandPress = useCallback(() => {
+    const s = simRef.current;
+    if (!s.handHoldActive) return;
+    const dur = s.handHoldDuration;
+    const charge = s.handCharge;
+    const growSnap = s.laserGrow;
+    s.handHoldActive = false;
+    s.handHoldDuration = 0;
+    s.handCharge = 0;
+    s.handChargeStep = 0;
+
+    if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') {
+      s.laserGrow = 0;
+      s.laserFadeTimer = 0;
+      return;
+    }
+
+    if (dur < 0.17) {
+      // Quick Tap -> Short Hand Hop + Crisp Snap Coin Toss!
+      s.handHopVy = -640;
+      s.handScaleX = 0.84;
+      s.handScaleY = 1.26;
+      s.handTiltDeg = -s.facing * 15;
+      s.landingRings.push({
+        x: s.cx,
+        y: s.cy + 18,
+        rx: 10,
+        maxRx: 46,
+        life: 0.24,
+        maxLife: 0.24,
+        color: 'rgba(245, 158, 11, 0.45)',
+      });
+      spawnDustPuff(s.cx, s.cy + 14, -s.facing, 3, 120);
+      synthRef.current?.playHandHop();
+      throwCoin(false, 0);
+      s.laserHoldSnapshot = Math.max(0.14, growSnap);
+      s.laserFadeTimer = 0.16;
+    } else {
+      // Hold Release -> Power Shot + Launch Lunge + Extended Glide!
+      const prevCharge = charge;
+      // Preserve charge momentarily for getSlingLaunchState inside throwCoin
+      s.handCharge = prevCharge;
+      const launch = getSlingLaunchState();
+      const fired = throwCoin(false, prevCharge);
+      s.handCharge = 0;
+      s.laserHoldSnapshot = Math.max(0.24, growSnap);
+      s.laserFadeTimer = 0.24;
+      if (fired) {
+        const cosL = Math.cos(launch.launchAngle);
+        const sinL = Math.sin(launch.launchAngle);
+        s.handOffsetX += cosL * (18 + prevCharge * 28);
+        s.handOffsetY += sinL * (14 + prevCharge * 22);
+        s.handScaleX = 1.24;
+        s.handScaleY = 0.82;
+        s.handTiltDeg = ((launch.launchAngle * 180) / Math.PI) * 0.18;
+        s.handGlideTimer = 0.28 + prevCharge * 0.44;
+        s.handGlideVx = cosL * (240 + prevCharge * 480);
+        s.handGlideVy = sinL * (180 + prevCharge * 320) - 90;
+        synthRef.current?.playChargedRelease(prevCharge);
+        if (prevCharge >= 0.72) {
+          spawnCollisionFx(launch.spawnX, launch.spawnY, cosL, sinL, '#FDE047', true);
+          spawnFloater(s.cx, s.cy - 68, 'POWER GLIDE!', '#0284C7', 16);
+        }
+      }
+    }
+  }, [throwCoin]);
 
   // Pointer & Keyboard Listeners
   useEffect(() => {
@@ -1756,11 +2700,13 @@ export function PiggyDuelPlugin({
       const nx = Math.max(24, Math.min(WORLD_W - 24, ((clientX - rect.left) / rect.width) * WORLD_W));
       const ny = Math.max(24, Math.min(WORLD_H - 24, ((clientY - rect.top) / rect.height) * WORLD_H));
       const s = simRef.current;
+      if (Math.hypot(nx - s.targetCx, ny - s.targetCy) > 12) {
+        s.playerIdleTimer = 0;
+      }
       s.targetCx = nx;
       s.targetCy = ny;
-      if (s.dashTimer <= 0) {
-        s.cx = nx;
-        s.cy = ny;
+      if (s.dashTimer <= 0 && !s.handHoldActive && s.handGlideTimer <= 0) {
+        moveHandWithCollision(nx, ny, 0.016, true);
       }
     };
 
@@ -1773,23 +2719,34 @@ export function PiggyDuelPlugin({
       if (target?.closest('button, header, [data-ui-card]')) return;
       updatePointerFromClient(e.clientX, e.clientY);
       const s = simRef.current;
-      if (s.phase === 'TITLE_MENU') {
-        s.throwHolding = false;
-        throwCoin(false);
-        return;
-      }
-      if (s.phase !== 'PLAYING') return;
+      if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') return;
       if (e.button === 2) {
-        e.preventDefault();
-        performDash();
+        if (s.phase === 'PLAYING') {
+          e.preventDefault();
+          performDash(true);
+        }
       } else {
-        s.throwHolding = true;
-        throwCoin(false);
+        startHandPress();
       }
     };
 
-    const onPointerUp = () => {
-      simRef.current.throwHolding = false;
+    const onPointerUp = (e: PointerEvent) => {
+      if (e.button === 2) {
+        simRef.current.dashHolding = false;
+      } else {
+        releaseHandPress();
+      }
+    };
+
+    const onWindowBlur = () => {
+      const s = simRef.current;
+      s.handHoldActive = false;
+      s.handCharge = 0;
+      s.laserGrow = 0;
+      s.laserFadeTimer = 0;
+      s.laserIgniteFlash = 0;
+      s.dashHolding = false;
+      s.throwHolding = false;
     };
 
     const onContextMenu = (e: MouseEvent) => {
@@ -1826,12 +2783,15 @@ export function PiggyDuelPlugin({
       if (e.key === ' ' || e.key === 'Shift') {
         if (s.phase === 'PLAYING') {
           e.preventDefault();
-          if (!e.repeat) performDash();
+          if (!e.repeat) {
+            performDash(true);
+          } else {
+            s.dashHolding = true;
+          }
         }
       } else if (e.key === 'j' || e.key === 'J' || e.key === 'f' || e.key === 'F') {
-        if (s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') {
-          s.throwHolding = true;
-          if (!e.repeat) throwCoin(false);
+        if ((s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') && !e.repeat) {
+          startHandPress();
         }
       } else if (e.key === 'r' || e.key === 'R') {
         if ((s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') && !e.repeat) {
@@ -1856,7 +2816,9 @@ export function PiggyDuelPlugin({
 
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'j' || e.key === 'J' || e.key === 'f' || e.key === 'F') {
-        simRef.current.throwHolding = false;
+        releaseHandPress();
+      } else if (e.key === ' ' || e.key === 'Shift') {
+        simRef.current.dashHolding = false;
       }
     };
 
@@ -1867,6 +2829,7 @@ export function PiggyDuelPlugin({
     rootEl?.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('pointermove', onPointerMove, { passive: true });
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('blur', onWindowBlur);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     return () => {
@@ -1876,10 +2839,11 @@ export function PiggyDuelPlugin({
       rootEl?.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [cycleLaserMode, performDash, setupRound, startRevolverReload, throwCoin]);
+  }, [cycleLaserMode, moveHandWithCollision, performDash, releaseHandPress, setupRound, startHandPress, startRevolverReload]);
 
   // Main 60fps Loop
   useEffect(() => {
@@ -1902,7 +2866,7 @@ export function PiggyDuelPlugin({
 
     const bronze = 'fill="url(#leg-bronze-grad)" stroke="#2b1e10" stroke-width="1.5"';
     const hl = 'stroke="#d9b987" stroke-width="3" fill="none" stroke-linecap="round"';
-    const legSVG = (i: number, T: number) => `<g id="L${i}">
+    const legSVG = (i: number, T: number) => `<g id="L${i}-wrap"><g id="L${i}">
       <path d="M-28 -18Q0 -24 28 -18Q31 ${T / 2} 24 ${T}Q0 ${T + 5} -24 ${T}Q-31 ${T / 2} -28 -18Z" ${bronze}/>
       <path d="M-15 -8Q-17 ${T / 2} -13 ${T - 6}" ${hl} opacity=".35"/>
       <g id="S${i}">
@@ -1921,7 +2885,7 @@ export function PiggyDuelPlugin({
           <path d="M30 31Q34 34 30 37Q-6 43 -42 37C-58 37-59 27-55 24Q-51 24 -46 28Q-43 30 -40 31Z" fill="#4c3e2f" stroke="#2a2219" stroke-width="1.5"/>
           <path d="M-30 20Q-45 20-50 27" stroke="#756048" stroke-width="2" fill="none" opacity=".7"/>
         </g>
-      </g></g>`;
+      </g></g></g>`;
     legsG.innerHTML = legSVG(1, HIPS[1].T) + legSVG(0, HIPS[0].T);
 
     s.piggyPos = $('piggy-pos') as SVGGElement;
@@ -1936,8 +2900,29 @@ export function PiggyDuelPlugin({
     s.tail = $('curly-tail-group') as SVGGElement;
     s.head = $('head-and-ears') as SVGGElement;
     s.tailMount = $('tail-mount') as SVGGElement;
+    s.tailEjectWrap = $('tail-eject-wrap') as SVGGElement;
     s.slotFollow = $('slot-follow') as SVGGElement;
+    s.slotEjectWrap = $('slot-eject-wrap') as SVGGElement;
     s.jetFollow = $('jet-follow') as SVGGElement;
+    s.jetTuckWrap = $('jet-tuck-wrap') as SVGGElement;
+    s.topScrewWrap = $('top-screw-wrap') as SVGGElement;
+    s.leftPauldron = $('left-pauldron') as SVGGElement;
+    s.rightPauldronWrap = $('right-pauldron-wrap') as SVGGElement;
+    s.leftSocket = $('left-socket') as SVGPathElement;
+    s.rightSocket = $('right-socket-g') as SVGGElement;
+    s.leftArmTuck = $('left-arm-tuck') as SVGGElement;
+    s.rightArmTuck = $('right-arm-tuck') as SVGGElement;
+    s.torsoChestWrap = $('torso-chest-wrap') as SVGGElement;
+    s.torsoBellyWrap = $('torso-belly-wrap') as SVGGElement;
+    s.torsoPelvisWrap = $('torso-pelvis-wrap') as SVGGElement;
+    s.leg0Wrap = $('L0-wrap') as SVGGElement;
+    s.leg1Wrap = $('L1-wrap') as SVGGElement;
+    s.piggyInnerCore = $('piggy-inner-core') as SVGGElement;
+    s.coreGearA = $('core-gear-a') as SVGGElement;
+    s.coreGearB = $('core-gear-b') as SVGGElement;
+    s.coreGearC = $('core-gear-c') as SVGGElement;
+    s.topScrewShank = $('top-screw-shank') as SVGGElement;
+    s.ballShellOverlay = $('ball-shell-overlay') as SVGGElement;
     s.jetGimbal = $('jet-gimbal') as SVGGElement;
     s.jetFlame = $('jet-flame') as SVGGElement;
     s.jetFlameBody = $('jet-flame-body') as SVGGElement;
@@ -1948,6 +2933,8 @@ export function PiggyDuelPlugin({
     s.glRaysIn = $('gl-rays-in') as SVGGElement;
     s.glBloomEl = $('gl-bloom-el') as SVGEllipseElement;
     s.glStarB = $('gl-star-b') as SVGGElement;
+    s.nervousColorMatrix = $('nervous-color-matrix') as SVGFEColorMatrixElement | null;
+    s.nervousRedGlow = $('nervous-red-glow') as SVGFEDropShadowElement | null;
     s.slotLightNextAt = performance.now() + 900;
     s.slotLightStartAt = -1;
     s.legs = HIPS.map((_, i) => ({
@@ -1986,12 +2973,13 @@ export function PiggyDuelPlugin({
       el?.setAttribute('transform', `rotate(${a.toFixed(2)} ${x} ${y})`);
     };
 
-    const applyBalloon = (a: number, st = 0, wob = 0) => {
+    const applyBalloon = (a: number, st = 0, wob = 0, m = 0, belly = 0) => {
       const CX = 560;
       const CY = 650;
       const sg = 150 + 70 * a;
       const gain = 0.9 * a;
       const grow = 1 + 0.55 * a;
+      const rBall = getBallSvgRadius(belly);
       const fmt = (v: number) => v.toFixed(1);
 
       const push = (x: number, y: number): [number, number] => {
@@ -2001,7 +2989,27 @@ export function PiggyDuelPlugin({
         const k = gain * Math.exp(-r2 / (2 * sg * sg));
         const ang = Math.atan2(dy, dx);
         const ripple = 1 + wob * Math.sin(Math.sqrt(r2) * 0.035 - s.ripplePhase + ang * 2);
-        return [x + dx * k * ripple * (1 - st), y + dy * k * ripple * (1 + st)];
+        let bx = x + dx * k * ripple * (1 - st);
+        let by = y + dy * k * ripple * (1 + st);
+
+        if (m > 0.002) {
+          const bdx = bx - BALL_CX;
+          const bdy = by - BALL_CY;
+          // Normalize torso's tall aspect ratio into a round sphere and lock outer contour to rBall
+          const eqX = bdx * 1.07;
+          const eqY = bdy * 0.84;
+          const eqR = Math.hypot(eqX, eqY);
+          if (eqR > 0.5) {
+            const rimW = Math.max(0, Math.min(1, (eqR - 120) / 115));
+            const innerR = eqR * (rBall / 248);
+            const targetR = innerR * (1 - rimW) + rBall * rimW;
+            const sxPt = BALL_CX + (eqX / eqR) * targetR;
+            const syPt = BALL_CY + (eqY / eqR) * targetR;
+            bx = bx + (sxPt - bx) * m;
+            by = by + (syPt - by) * m;
+          }
+        }
+        return [bx, by];
       };
 
       for (const p of s.balloonPaths) {
@@ -2022,26 +3030,31 @@ export function PiggyDuelPlugin({
 
       for (const e of s.balloonEllipses) {
         const [nx, ny] = push(e.cx, e.cy);
+        const ballEllipseShrink = 1 - 0.18 * m;
         e.el.setAttribute('cx', fmt(nx));
         e.el.setAttribute('cy', fmt(ny));
-        e.el.setAttribute('rx', fmt(e.rx * grow * (1 - st * 0.6)));
-        e.el.setAttribute('ry', fmt(e.ry * grow * (1 + st * 0.6)));
+        e.el.setAttribute('rx', fmt(e.rx * grow * ballEllipseShrink * (1 - st * 0.6)));
+        e.el.setAttribute('ry', fmt(e.ry * grow * ballEllipseShrink * (1 + st * 0.6)));
         if (e.ang) e.el.setAttribute('transform', `rotate(${e.ang} ${fmt(nx)} ${fmt(ny)})`);
       }
 
       const [tx, ty] = push(696, 634);
       s.tailMount?.setAttribute('transform', `translate(${fmt(tx - 696)} ${fmt(ty - 634)})`);
 
-      // Coin slot follows slow bellyGoal + ballMorph roundness smoothly
-      const aS = Math.min(1.3, s.bellyGoal + s.ballMorph * 0.42);
+      // Coin slot smoothly settles onto the curved sphere surface in ball mode
+      const aS = Math.min(1.3, s.bellyGoal + m * 0.25);
       const sgS = 150 + 70 * aS;
       const gS = 0.9 * aS;
       const dxS = 545 - CX;
       const dyS = 450 - CY;
       const kS = gS * Math.exp(-(dxS * dxS + dyS * dyS) / (2 * sgS * sgS));
-      const px = 545 + dxS * kS;
-      const py = 450 + dyS * kS;
-      const ss = 1 + 0.3 * aS;
+      const normalPx = 545 + dxS * kS;
+      const normalPy = 450 + dyS * kS;
+      const ballSlotX = BALL_CX - 32;
+      const ballSlotY = BALL_CY - rBall * 0.54;
+      const px = normalPx * (1 - m) + ballSlotX * m;
+      const py = normalPy * (1 - m) + ballSlotY * m;
+      const ss = (1 + 0.3 * aS) * (1 - 0.18 * m);
       s.slotFollow?.setAttribute(
         'transform',
         `translate(${fmt(px - 545)} ${fmt(py - 450)}) translate(545 450) scale(${fmt(ss)} ${fmt(ss)}) translate(-545 -450)`
@@ -2049,6 +3062,17 @@ export function PiggyDuelPlugin({
 
       const [jx, jy] = push(742, 672);
       s.jetFollow?.setAttribute('transform', `translate(${fmt(jx - 742)} ${fmt(jy - 672)})`);
+
+      if (s.ballShellOverlay) {
+        s.ballShellOverlay.setAttribute('opacity', (m * 0.92).toFixed(2));
+        if (m > 0.01) {
+          const shellScale = rBall / 236;
+          s.ballShellOverlay.setAttribute(
+            'transform',
+            `translate(${BALL_CX} ${BALL_CY}) scale(${shellScale.toFixed(4)}) translate(${-BALL_CX} ${-BALL_CY})`
+          );
+        }
+      }
     };
 
     const poseRig = (dt: number, nowMs: number) => {
@@ -2110,18 +3134,27 @@ export function PiggyDuelPlugin({
         s.bossAction === 'JET_FLIGHT'
           ? -18 - Math.min(14, speedNorm * 10)
           : hurtArm || anticipateNext;
-      const la = s.spLa.step(8 * mm * s1 + clampAbs(s.ay * 0.014, 16) - lean * 0.85 + windupArm - landFlex * 18, dt);
-      const ra = s.spRa.step(-7 * mm * s1 - clampAbs(s.ay * 0.014, 16) - lean * 0.85 - windupArm + landFlex * 18, dt);
+      const isWalkingPose = s.bossAction === 'WALK' && s.alt <= 8 && s.ballMorph < 0.2;
+      const targetLa = isWalkingPose
+        ? -32 + 5 * mm * s1 + hurtArm * 0.45
+        : 8 * mm * s1 + clampAbs(s.ay * 0.014, 16) - lean * 0.85 + windupArm - landFlex * 18;
+      const targetRa = isWalkingPose
+        ? 72 - 5 * mm * s1 - hurtArm * 0.45
+        : -7 * mm * s1 - clampAbs(s.ay * 0.014, 16) - lean * 0.85 - windupArm + landFlex * 18;
+      const la = s.spLa.step(targetLa, dt);
+      const ra = s.spRa.step(targetRa, dt);
       const airTailDrag = -s.dir * Math.min(18, Math.abs(s.realVx) * 0.018) + clampAbs(s.vAlt * 0.035, 16);
       const tl = s.spTail.step(15 * mm * Math.sin(2 * s.phi + 0.8) - clampAbs(s.ay * 0.022, 24) + lean * 1.45 + airTailDrag, dt);
 
-      // Realistic footstep dust + subtle step thud when sprinting on ground
+      // Realistic footstep dust + subtle step thud when walking/sprinting on ground
       if (s.onGround && airK < 0.18 && s.walkM > 0.35 && Math.floor(s.phi / Math.PI) !== s.stepNo) {
         s.stepNo = Math.floor(s.phi / Math.PI);
         s.bellyVel += 0.015 * Math.min(s.walkM, 1.7);
         if (s.walkM > 0.65) {
           spawnDustPuff(s.px - s.dir * 16, FLOOR_Y - 2, -s.dir, 2, 95);
-          synthRef.current?.playStep();
+          if (s.phase === 'PLAYING') {
+            synthRef.current?.playStep();
+          }
         }
       }
 
@@ -2144,30 +3177,67 @@ export function PiggyDuelPlugin({
       const vibR = vb * 0.45 * Math.sin(nowMs * 0.11 + 0.5);
 
       const m = s.ballMorph;
-      const limbFade = Math.max(0, 1 - m * 1.55);
+      const limbFade = Math.max(0, 1 - m * 1.65);
+      const tuckScale = Math.max(0.14, 1 - 0.86 * m);
+      const tuckAttr = m > 0.005 ? `translate(${BALL_CX} ${BALL_CY}) scale(${tuckScale.toFixed(3)}) translate(${-BALL_CX} ${-BALL_CY})` : '';
+      const tuckOp = m > 0.005 ? limbFade.toFixed(2) : '1';
+
       if (s.legsG) {
         if (m > 0.005) {
-          const legSc = 1 - 0.88 * m;
           s.legsG.setAttribute(
             'transform',
-            `translate(${(vibX * 1.3).toFixed(2)} ${(dyN + vibY * 1.3 - 120 * m).toFixed(2)}) translate(550 760) scale(${legSc.toFixed(3)}) translate(-550 -760)`
+            `translate(${(vibX * 1.3).toFixed(2)} ${(dyN + vibY * 1.3 - 150 * m).toFixed(2)}) translate(${BALL_CX} ${BALL_CY + 140}) scale(${tuckScale.toFixed(3)}) translate(${-BALL_CX} ${-(BALL_CY + 140)})`
           );
-          s.legsG.style.opacity = limbFade.toFixed(2);
+          s.legsG.style.opacity = tuckOp;
         } else {
           s.legsG.setAttribute('transform', `translate(${(vibX * 1.3).toFixed(2)} ${(dyN + vibY * 1.3).toFixed(2)})`);
           s.legsG.style.opacity = '1';
         }
       }
-      if (s.la) s.la.style.opacity = m > 0.005 ? limbFade.toFixed(2) : '1';
-      if (s.ra) s.ra.style.opacity = m > 0.005 ? limbFade.toFixed(2) : '1';
-      if (s.tailMount) s.tailMount.style.opacity = m > 0.005 ? limbFade.toFixed(2) : '1';
+      if (s.la) s.la.style.opacity = tuckOp;
+      if (s.ra) s.ra.style.opacity = tuckOp;
+      if (s.tailMount) s.tailMount.style.opacity = tuckOp;
+      if (s.leftArmTuck) s.leftArmTuck.setAttribute('transform', tuckAttr);
+      if (s.rightArmTuck) s.rightArmTuck.setAttribute('transform', tuckAttr);
+
+      const attachFade = Math.max(0, 1 - m * 1.45).toFixed(2);
+      const attachTuckScale = Math.max(0.22, 1 - 0.78 * m);
+      const attachAttr =
+        m > 0.005
+          ? `translate(${BALL_CX} ${BALL_CY}) scale(${attachTuckScale.toFixed(3)}) translate(${-BALL_CX} ${-BALL_CY})`
+          : '';
+      for (const attachEl of [
+        s.topScrewWrap,
+        s.leftPauldron,
+        s.rightPauldronWrap,
+        s.leftSocket,
+        s.rightSocket,
+        s.jetTuckWrap,
+      ]) {
+        if (!attachEl) continue;
+        attachEl.style.opacity = m > 0.005 ? attachFade : '1';
+        attachEl.setAttribute('transform', attachAttr);
+      }
+
+      const n = s.bossAction === 'BREAKING' ? 0 : s.nervousLevel;
+      const dz = s.bossAction === 'BREAKING' ? 0 : s.dizzyLevel;
+      const dzPhase = s.dizzyPhase;
+      const dizzyBodyX = dz * Math.sin(dzPhase) * 9.5;
+      const dizzyBodyY = dz * Math.sin(dzPhase * 2) * 3.6;
+      const dizzyBodyRot = dz * Math.sin(dzPhase * 0.9) * 9.2;
+      const dizzyHeadRot = dz * Math.sin(dzPhase * 1.15 + 0.5) * 16.5;
+      const dizzyEarL = dz * Math.cos(dzPhase * 1.35) * 18;
+      const dizzyEarR = dz * Math.sin(dzPhase * 1.35 + 0.9) * 18;
+      const dizzyArm = dz * Math.sin(dzPhase * 1.05) * 19;
+
+      const nervousTremorX = n > 0.05 ? (Math.sin(nowMs * 0.095) + 0.55 * Math.sin(nowMs * 0.163)) * n * 4.4 : 0;
+      const nervousTremorY = n > 0.05 ? Math.cos(nowMs * 0.125) * n * 2.4 : 0;
       const strainJitter =
         s.bossAction === 'BREAKING'
           ? Math.sin(nowMs * 0.05) * 12
-          : s.bellyLevel > 0.72
-          ? Math.sin(nowMs * 0.035) * (s.bellyLevel - 0.72) * 16
-          : 0;
-      const hurtShakeX = s.hurtTimer > 0 ? Math.sin(s.hurtTimer * 55) * 12 * s.hurtDir : 0;
+          : (s.bellyLevel > 0.72 ? Math.sin(nowMs * 0.035) * (s.bellyLevel - 0.72) * 16 : 0) +
+            n * Math.sin(nowMs * 0.072) * 6.5;
+      const hurtShakeX = (s.hurtTimer > 0 ? Math.sin(s.hurtTimer * 55) * 12 * s.hurtDir : 0) + nervousTremorX;
 
       const climbTilt = airK * clampAbs(-s.vAlt * 0.022, 9);
       const bodyRotBase =
@@ -2178,24 +3248,51 @@ export function PiggyDuelPlugin({
         landFlex * 4.5 +
         vibR +
         strainJitter +
+        dizzyBodyRot +
         s.slotReceiveTilt;
       const bodyRot = bodyRotBase * (1 - m) + s.ballAngle * m;
-      const ballPivotY = 750 * (1 - m) + 545 * m;
-      const ballDropY = dyN * (1 - m) + 46 * m;
+      const rBall = getBallSvgRadius(s.bellyLevel);
+      const ballIdealDropY = 911 - (BALL_CY + rBall);
+      const ballPivotX = 550 * (1 - m) + BALL_CX * m;
+      const ballPivotY = 750 * (1 - m) + BALL_CY * m;
+      const ballDropY = dyN * (1 - m) + ballIdealDropY * m;
       const bodySx = 1 + sx * (1 - m);
       const bodySy = 1 - sq * (1 - m);
 
+      // Elastic squash & stretch in ball mode (floor/wall impact + velocity elongation)
+      const bSq = s.spBallSq.step(0, dt);
+      const bWall = s.spBallWall.step(0, dt);
+      s.ballSquashContact += (0 - s.ballSquashContact) * Math.min(1, dt * 8.5);
+      const sqTotal = clampAbs((bSq - bWall) * (0.25 + 0.75 * m), 0.36);
+      const impactSx = 1 + sqTotal;
+      const impactSy = 1 / Math.max(0.66, impactSx);
+      const contactSinkY = s.ballSquashContact > 0.01 ? s.ballSquashContact * rBall * Math.max(0, 1 - impactSy) : 0;
+
+      const bSpeed = Math.hypot(s.ballVx, s.ballVy);
+      const velStretch = m * Math.min(0.18, (bSpeed / 1280) * 0.16);
+      const worldVelDeg = (Math.atan2(s.ballVy, s.ballVx) * 180) / Math.PI;
+      const localVelDeg = s.dir > 0 ? 180 - worldVelDeg : worldVelDeg;
+      const impactPart =
+        Math.abs(sqTotal) > 0.002
+          ? ` translate(${BALL_CX} ${BALL_CY}) scale(${impactSx.toFixed(4)} ${impactSy.toFixed(4)}) translate(${-BALL_CX} ${-BALL_CY})`
+          : '';
+      const velPart =
+        velStretch > 0.004
+          ? ` translate(${BALL_CX} ${BALL_CY}) rotate(${localVelDeg.toFixed(1)}) scale(${(1 + velStretch).toFixed(4)} ${(1 / (1 + velStretch)).toFixed(4)}) rotate(${(-localVelDeg).toFixed(1)}) translate(${-BALL_CX} ${-BALL_CY})`
+          : '';
+
       s.bodyG?.setAttribute(
         'transform',
-        `translate(${(hurtShakeX + vibX).toFixed(2)} ${(ballDropY + vibY).toFixed(2)}) translate(550 790) scale(${bodySx.toFixed(4)} ${bodySy.toFixed(4)}) translate(-550 -790) rotate(${bodyRot.toFixed(2)} 550 ${ballPivotY.toFixed(1)})`
+        `translate(${(hurtShakeX + vibX + dizzyBodyX).toFixed(2)} ${(ballDropY + contactSinkY + vibY + nervousTremorY + dizzyBodyY).toFixed(2)})${impactPart}${velPart} translate(550 790) scale(${bodySx.toFixed(4)} ${bodySy.toFixed(4)}) translate(-550 -790) rotate(${bodyRot.toFixed(2)} ${ballPivotX.toFixed(1)} ${ballPivotY.toFixed(1)})`
       );
-      const earFlop = landFlex * 14 + speedNorm * 7 * s.dir;
-      armT(s.la, la + vb * 1.6 * Math.sin(nowMs * 0.12), 300, 345);
-      armT(s.ra, ra + vb * 1.6 * Math.sin(nowMs * 0.12 + 1.3), 640, 235);
-      rotEl(s.le, 7 * mm * w + earFlop, 350, 195);
-      rotEl(s.re, -6 * mm * w + earFlop * 0.85, 490, 150);
-      rotEl(s.tail, tl + vb * 2.4 * Math.sin(nowMs * 0.14 + 0.7), 696, 634);
-      rotEl(s.head, 1.5 * mm * Math.sin(2 * s.phi + 0.5) + landFlex * 4, 440, 260);
+      const earFlop = landFlex * 14 + speedNorm * 7 * s.dir + n * 10 * Math.sin(nowMs * 0.062);
+      const nervousArmFlail = n * 14 * Math.sin(nowMs * 0.054);
+      armT(s.la, la + vb * 1.6 * Math.sin(nowMs * 0.12) - nervousArmFlail + dizzyArm, 300, 345);
+      armT(s.ra, ra + vb * 1.6 * Math.sin(nowMs * 0.12 + 1.3) + nervousArmFlail - dizzyArm, 640, 235);
+      rotEl(s.le, 7 * mm * w + earFlop + dizzyEarL, 350, 195);
+      rotEl(s.re, -6 * mm * w + earFlop * 0.85 + dizzyEarR, 490, 150);
+      rotEl(s.tail, tl + vb * 2.4 * Math.sin(nowMs * 0.14 + 0.7) + n * 18 * Math.sin(nowMs * 0.088), 696, 634);
+      rotEl(s.head, 1.5 * mm * Math.sin(2 * s.phi + 0.5) + landFlex * 4 + n * 4.5 * Math.sin(nowMs * 0.058) + dizzyHeadRot, 440, 260);
 
       // Rear Jet gimbal, flame & sparks
       const jetAng = flying ? 80 - 66 * sp + (s.vAlt > 20 ? 6 : 0) : s.bossAction === 'PATTERN_MOVE' ? 18 : 40;
@@ -2276,57 +3373,253 @@ export function PiggyDuelPlugin({
         }
       }
 
-      s.actor?.setAttribute('transform', s.dir > 0 ? 'translate(1100 0) scale(-1 1)' : '');
-      const breakShrink = s.bossAction === 'BREAKING' ? Math.max(0.25, s.breakTimer / 1.05) : 1;
-      s.piggyPos?.setAttribute(
-        'transform',
-        `translate(${s.px.toFixed(1)} ${(FLOOR_Y + s.py).toFixed(1)}) scale(${(PIGGY_SCALE * breakShrink).toFixed(3)}) translate(-550 -911)`
-      );
-      if (s.piggyPos) {
-        if (s.bossAction === 'BREAKING') {
-          s.piggyPos.style.opacity = Math.max(0, s.breakTimer / 1.05).toFixed(2);
-          s.piggyPos.style.filter = 'brightness(1.45) sepia(0.25)';
+      const breakElapsed = s.bossAction === 'BREAKING' ? Math.max(0, s.breakMax - s.breakTimer) : 0;
+      const breakDetonated = s.bossAction === 'BREAKING' && s.breakStage >= 1;
+
+      if (s.bossAction === 'BREAKING') {
+        s.actor?.setAttribute('transform', s.breakDir > 0 ? 'translate(1100 0) scale(-1 1)' : '');
+        s.piggyPos?.setAttribute(
+          'transform',
+          `translate(${s.breakPx.toFixed(1)} ${(FLOOR_Y + s.breakPy).toFixed(1)}) scale(${PIGGY_SCALE.toFixed(3)}) translate(-550 -911)`
+        );
+
+        if (breakDetonated) {
+          // Neutralize parent transforms once parts have popped off so world-space ballistic pieces align cleanly
+          s.bodyG?.setAttribute('transform', '');
+          if (s.legsG) {
+            s.legsG.setAttribute('transform', '');
+            s.legsG.style.opacity = '1';
+          }
+          if (s.leftSocket) s.leftSocket.style.opacity = '0';
+          if (s.rightSocket) s.rightSocket.style.opacity = '0';
+          if (s.ballShellOverlay) s.ballShellOverlay.setAttribute('opacity', '0');
+          if (s.la) s.la.style.opacity = '1';
+          if (s.ra) s.ra.style.opacity = '1';
+          if (s.tailMount) s.tailMount.style.opacity = '1';
+          s.jetFlame?.setAttribute('opacity', s.breakTimer > 1.35 ? '0.65' : '0');
+          s.jetEmber?.setAttribute('opacity', '0.45');
         } else {
+          // Overpressure buildup shake before seam detonation
+          const buildFrac = Math.min(1, breakElapsed / 0.36);
+          const buildShakeX = Math.sin(nowMs * 0.095) * (8 + buildFrac * 22);
+          const buildShakeY = Math.cos(nowMs * 0.125) * (5 + buildFrac * 14);
+          const swellScale = 1 + buildFrac * 0.085;
+          s.bodyG?.setAttribute(
+            'transform',
+            `translate(${buildShakeX.toFixed(2)} ${buildShakeY.toFixed(2)}) translate(550 560) scale(${swellScale.toFixed(4)}) translate(-550 -560)`
+          );
+          s.legsG?.setAttribute('transform', `translate(${(buildShakeX * 0.5).toFixed(2)} ${(buildShakeY * 0.4).toFixed(2)})`);
+        }
+
+        // Exposed inner steampunk clockwork core visibility + 3-gear precision spin
+        if (s.piggyInnerCore) {
+          const coreOp =
+            breakElapsed < 0.36
+              ? Math.min(0.94, (breakElapsed / 0.36) * 0.94)
+              : breakElapsed < 1.05
+              ? 1
+              : Math.max(0, 1 - (breakElapsed - 1.05) / 0.22);
+          s.piggyInnerCore.setAttribute('opacity', coreOp.toFixed(3));
+          const gearSpin = breakElapsed * (breakElapsed > 0.36 ? 760 : 360);
+          s.coreGearA?.setAttribute('transform', `translate(494 456) rotate(${gearSpin.toFixed(1)})`);
+          s.coreGearB?.setAttribute('transform', `translate(602 522) rotate(${(-gearSpin * 1.35).toFixed(1)})`);
+          s.coreGearC?.setAttribute('transform', `translate(534 576) rotate(${(gearSpin * 1.85).toFixed(1)})`);
+        }
+
+        // Apply individual world-space ballistic transforms + threaded top-screw unthreading
+        const dirSign = s.breakDir > 0 ? -1 : 1;
+        const partFade = s.breakTimer < 0.32 ? Math.max(0, s.breakTimer / 0.32) : 1;
+        for (const dp of s.disassemblyParts) {
+          if (!dp.el) continue;
+          if (!dp.detached) {
+            dp.el.style.opacity = '1';
+            if (dp.unscrew && breakElapsed >= 0.02) {
+              const u = Math.min(1, (breakElapsed - 0.02) / 0.2);
+              s.topScrewShank?.setAttribute('opacity', Math.min(1, u * 1.4).toFixed(2));
+              dp.el.setAttribute(
+                'transform',
+                `translate(${(-u * 18).toFixed(1)} ${(-u * 74).toFixed(1)}) rotate(${(u * 720).toFixed(1)} ${dp.cx} ${dp.cy})`
+              );
+            } else if (!breakDetonated && breakElapsed > 0.16) {
+              const seamJitter = (breakElapsed - 0.16) / 0.2;
+              const jx = (dp.cx - 550) * 0.095 * seamJitter;
+              const jy = (dp.cy - 520) * 0.095 * seamJitter;
+              dp.el.setAttribute('transform', `translate(${jx.toFixed(1)} ${jy.toFixed(1)})`);
+            }
+            continue;
+          }
+          if (dp.id === 'topScrew') {
+            s.topScrewShank?.setAttribute('opacity', '1');
+          }
+          const dxSvg = dirSign * ((dp.wx - dp.wx0) / PIGGY_SCALE);
+          const dySvg = (dp.wy - dp.wy0) / PIGGY_SCALE;
+          dp.el.setAttribute(
+            'transform',
+            `translate(${dxSvg.toFixed(1)} ${dySvg.toFixed(1)}) rotate(${(dirSign * dp.rot).toFixed(1)} ${dp.cx} ${dp.cy})`
+          );
+          dp.el.style.opacity = partFade.toFixed(2);
+        }
+
+        if (s.piggyPos) {
+          s.piggyPos.style.opacity = s.breakTimer < 0.24 ? Math.max(0, s.breakTimer / 0.24).toFixed(2) : '1';
+          if (!breakDetonated) {
+            const flashK = 1 + 0.45 * Math.min(1, breakElapsed / 0.36);
+            s.piggyPos.style.filter = `brightness(${flashK.toFixed(2)}) saturate(${(1 + breakElapsed * 1.4).toFixed(2)})`;
+          } else {
+            s.piggyPos.style.filter = breakElapsed < 0.52 ? 'brightness(1.28)' : '';
+          }
+        }
+        if (s.shadowEl) {
+          const shadowOp = Math.max(0, 0.16 * (1 - Math.min(1, breakElapsed / 0.48)));
+          s.shadowEl.setAttribute('fill', `rgba(45, 32, 18, ${shadowOp.toFixed(3)})`);
+        }
+      } else {
+        if (s.piggyInnerCore) s.piggyInnerCore.setAttribute('opacity', '0');
+        if (s.topScrewShank) s.topScrewShank.setAttribute('opacity', '0');
+        s.actor?.setAttribute('transform', s.dir > 0 ? 'translate(1100 0) scale(-1 1)' : '');
+        s.piggyPos?.setAttribute(
+          'transform',
+          `translate(${(s.px + (s.bossAction === 'PATTERN_STOP' ? s.nervousJitterX : 0)).toFixed(1)} ${(FLOOR_Y + s.py).toFixed(1)}) scale(${PIGGY_SCALE.toFixed(3)}) translate(-550 -911)`
+        );
+        if (s.piggyPos) {
           s.piggyPos.style.opacity = '1';
-          s.piggyPos.style.filter = s.bossFlash > 0 ? 'brightness(1.45) contrast(1.15)' : '';
+          if (n > 0.04) {
+            const pulse = 0.5 + 0.5 * Math.sin(nowMs * (0.015 + 0.014 * n));
+            if (s.nervousColorMatrix) {
+              const rGain = (1 + 0.54 * n + 0.16 * n * pulse).toFixed(3);
+              const gToR = (0.22 * n).toFixed(3);
+              const rOff = (0.09 * n + 0.04 * n * pulse).toFixed(3);
+              const gGain = Math.max(0.42, 1 - 0.5 * n).toFixed(3);
+              const bGain = Math.max(0.28, 1 - 0.66 * n).toFixed(3);
+              s.nervousColorMatrix.setAttribute(
+                'values',
+                `${rGain} ${gToR} 0 0 ${rOff}  0 ${gGain} 0 0 0  0 0 ${bGain} 0 0  0 0 0 1 0`
+              );
+            }
+            if (s.nervousRedGlow) {
+              s.nervousRedGlow.setAttribute('stdDeviation', (7 + 9 * n * (0.45 + 0.55 * pulse)).toFixed(2));
+              s.nervousRedGlow.setAttribute('flood-opacity', ((0.28 + 0.54 * pulse) * n).toFixed(3));
+            }
+            const flashPart = s.bossFlash > 0 ? ' brightness(1.38) contrast(1.14)' : '';
+            s.piggyPos.style.filter = s.textureOn
+              ? `url(#nervous-red-shader)${flashPart}`
+              : `sepia(${(0.75 * n).toFixed(2)}) hue-rotate(-38deg) saturate(${(1.15 + 1.6 * n).toFixed(2)})${flashPart}`;
+          } else {
+            s.piggyPos.style.filter = s.bossFlash > 0 ? 'brightness(1.45) contrast(1.15)' : '';
+          }
+        }
+
+        if (s.shadowEl) {
+          const hf = Math.max(0.32, 1 - airAlt / 620);
+          s.shadowEl.setAttribute('cx', s.px.toFixed(1));
+          s.shadowEl.setAttribute('rx', ((98 + s.bellyLevel * 38) * PIGGY_UNIT * hf).toFixed(1));
+          s.shadowEl.setAttribute('fill', `rgba(45, 32, 18, ${(0.17 * hf).toFixed(3)})`);
         }
       }
+    };
 
-      if (s.shadowEl) {
-        const hf = Math.max(0.32, 1 - airAlt / 620) * breakShrink;
-        s.shadowEl.setAttribute('cx', s.px.toFixed(1));
-        s.shadowEl.setAttribute('rx', ((98 + s.bellyLevel * 38) * PIGGY_UNIT * hf).toFixed(1));
-        s.shadowEl.setAttribute('fill', `rgba(45, 32, 18, ${(0.17 * hf).toFixed(3)})`);
+    const spawnMechanicalDebris = (
+      cx: number,
+      cy: number,
+      count: number,
+      power = 1,
+      mode: 'burst' | 'screws' = 'burst'
+    ) => {
+      const s = simRef.current;
+      const kinds: MechanicalDebris['kind'][] =
+        mode === 'screws'
+          ? ['screw', 'bolt', 'washer', 'screw', 'nut']
+          : ['screw', 'bolt', 'gear', 'plate', 'washer', 'spring', 'nut'];
+      const colors = ['#D97706', '#B45309', '#F59E0B', '#92400E', '#64748B', '#78350F'];
+      for (let i = 0; i < count; i++) {
+        const ang =
+          mode === 'screws'
+            ? -Math.PI * (0.18 + Math.random() * 0.64)
+            : -Math.PI * (0.06 + Math.random() * 0.88);
+        const kind = kinds[i % kinds.length];
+        const mass =
+          kind === 'plate'
+            ? 1.75
+            : kind === 'gear'
+            ? 1.35
+            : kind === 'bolt' || kind === 'spring'
+            ? 1.15
+            : 0.85;
+        const spd = (240 + Math.random() * 620) * (power / Math.sqrt(mass));
+        const r =
+          kind === 'plate'
+            ? 13 + Math.random() * 7
+            : kind === 'gear'
+            ? 11 + Math.random() * 8
+            : kind === 'spring'
+            ? 11 + Math.random() * 6
+            : kind === 'screw' || kind === 'bolt'
+            ? 9 + Math.random() * 4.5
+            : 7.5 + Math.random() * 4;
+        s.debrisItems.push({
+          x: cx + (Math.random() - 0.5) * (mode === 'screws' ? 92 : 76),
+          y: cy + (Math.random() - 0.5) * (mode === 'screws' ? 76 : 64),
+          vx: Math.cos(ang) * spd * (Math.random() < 0.5 ? -1 : 1) * (0.72 + Math.random() * 0.55),
+          vy: Math.sin(ang) * spd - (mode === 'screws' ? 230 : 155) * power,
+          r,
+          rot: Math.random() * 360,
+          vrot: (Math.random() - 0.5) * (kind === 'screw' || kind === 'washer' ? 1120 : 620 / Math.sqrt(mass)),
+          kind,
+          color: colors[i % colors.length],
+          life: 2.0 + Math.random() * 0.75,
+          maxLife: 2.6,
+          bounces: 0,
+          mass,
+          bounce: kind === 'plate' ? 0.24 : kind === 'gear' ? 0.34 : kind === 'spring' ? 0.56 : 0.44,
+        });
       }
     };
 
     const advanceToNextPatternSpot = (skipBallTrigger = false) => {
       const s = simRef.current;
+      const n = s.nervousLevel;
+      s.nervousJitterX = 0;
       s.stopsSinceBall += 1;
-      if (!skipBallTrigger && s.stopsSinceBall >= s.ballTriggerStops) {
+      const surprisePanicBall = n > 0.62 && Math.random() < 0.34;
+      if (!skipBallTrigger && (s.stopsSinceBall >= s.ballTriggerStops || surprisePanicBall)) {
         s.stopsSinceBall = 0;
-        s.ballTriggerStops = s.difficulty === 'FRENZY' ? 2 : 3;
+        s.ballTriggerStops = n > 0.45 ? 1 : s.difficulty === 'FRENZY' ? 2 : 3;
         s.bossAction = 'BOUNCY_BALL';
-        s.ballTimer = (s.difficulty === 'FRENZY' ? 4.4 : 3.6) + Math.min(1.0, (s.round - 1) * 0.2);
+        s.ballTimer = (s.difficulty === 'FRENZY' ? 4.4 : 3.6) + Math.min(1.0, (s.round - 1) * 0.2) + n * 0.85;
         const dirToCenter = s.px < WORLD_W * 0.5 ? 1 : -1;
-        const ballSpeedBoost = (s.difficulty === 'FRENZY' ? 1.18 : 1.0) + (s.round - 1) * 0.05;
+        const ballSpeedBoost = (s.difficulty === 'FRENZY' ? 1.18 : 1.0) + (s.round - 1) * 0.05 + n * 0.24;
         s.ballVx = dirToCenter * (490 + Math.random() * 230) * ballSpeedBoost;
-        s.ballVy = -(820 + Math.random() * 240);
-        s.ballSpin = dirToCenter * (520 + Math.random() * 260);
+        s.ballVy = -(820 + Math.random() * 240) * (1 + n * 0.14);
+        s.ballSpin = dirToCenter * (520 + Math.random() * 260) * (1 + n * 0.32);
         s.dir = dirToCenter;
         s.walkM = 0;
         s.onGround = false;
-        spawnCollisionFx(s.px, FLOOR_Y + s.py - 85, 0, -1, '#F59E0B', true);
-        synthRef.current?.playBallBoing(1.15);
+        s.spBallSq.v = -4.2 * (1 + n * 0.25);
+        s.bellyVel += 0.22 + n * 0.12;
+        spawnCollisionFx(s.px, FLOOR_Y + s.py - 85, 0, -1, n > 0.45 ? '#EF4444' : '#F59E0B', true);
+        synthRef.current?.playBallBoing(1.15 + n * 0.2);
         return;
       }
 
       const pat = ROUND_PATTERNS[s.patternIndex % ROUND_PATTERNS.length];
-      const nextIdx = (s.spotIndex + 1) % pat.spots.length;
+      // Dedicated grounded WALK patrol state once per cycle when calm on the floor
+      if (!skipBallTrigger && s.alt <= 4 && s.stopsSinceBall === 1 && n < 0.52) {
+        s.bossAction = 'WALK';
+        s.goalAlt = 0;
+        s.walkTimer = s.difficulty === 'FRENZY' ? 1.15 : 1.5;
+        s.walkTurnPause = 0;
+        if (s.px <= MIN_X + 140) s.dir = 1;
+        else if (s.px >= MAX_X - 140) s.dir = -1;
+        return;
+      }
+
+      const skipStep = n > 0.32 && Math.random() < 0.46 * n ? 2 : 1;
+      const nextIdx = (s.spotIndex + skipStep) % pat.spots.length;
       const nextSpot = pat.spots[nextIdx];
       const frenzyBoost = s.difficulty === 'FRENZY' ? 1.25 : 1.0;
       const cycleBoost = 1 + Math.floor((s.round - 1) / ROUND_PATTERNS.length) * 0.15;
-      const speed = pat.baseMoveSpeed * frenzyBoost * cycleBoost;
+      const nervousBoost = 1 + n * 0.48;
+      const speed = pat.baseMoveSpeed * frenzyBoost * cycleBoost * nervousBoost;
 
       const dist = Math.hypot(nextSpot.x - s.px, (nextSpot.alt - s.alt) * PIGGY_SCALE);
       s.spotIndex = nextIdx;
@@ -2335,46 +3628,63 @@ export function PiggyDuelPlugin({
       s.moveTargetX = nextSpot.x;
       s.moveTargetAlt = nextSpot.alt;
       s.moveElapsed = 0;
-      s.moveDuration = Math.max(0.45, Math.min(1.08, dist / speed));
-      // Natural aerodynamic arc: hop on wide ground dashes, smooth lift curve on aerial flights
-      s.moveArcAlt =
+      const minDur = n > 0.4 ? 0.3 : 0.45;
+      s.moveDuration = Math.max(minDur, Math.min(1.08, dist / speed));
+      // Natural aerodynamic arc: hop on wide ground dashes, smooth lift curve on aerial flights, volatile hops when nervous
+      const baseArc =
         nextSpot.alt === 0 && s.alt === 0 && dist > 420
           ? 125
           : nextSpot.alt > 20 || s.alt > 20
           ? Math.min(95, dist * 0.085)
           : 0;
+      s.moveArcAlt = baseArc + (n > 0.3 && Math.random() < 0.65 ? n * 92 : 0);
       s.bossAction = nextSpot.alt > 20 || s.alt > 20 || s.moveArcAlt > 0 ? 'JET_FLIGHT' : 'PATTERN_MOVE';
       s.dir = nextSpot.x >= s.px ? 1 : -1;
-      s.spLean.v += s.dir * 22;
+      s.spLean.v += s.dir * (22 + n * 16);
       // Push off the floor cleanly with takeoff dust + squash impulse!
       if (s.alt < 12 && (nextSpot.alt > 20 || s.moveArcAlt > 0)) {
-        spawnDustPuff(s.px, FLOOR_Y - 2, -s.dir, 6, 190);
-        s.spSq.v += 1.4;
+        spawnDustPuff(s.px, FLOOR_Y - 2, -s.dir, 6, 190 + n * 70);
+        s.spSq.v += 1.4 + n * 0.6;
         synthRef.current?.playBossAttack();
       } else if (nextSpot.alt > s.alt + 40) {
         synthRef.current?.playBossAttack();
       }
     };
 
-    // Progressive Pump + Money-Hurt Reaction every time a coin drops inside!
-    const receiveCoinInSlot = (coinX: number, coinY: number, amount: number, isSlotDirect: boolean) => {
+    // Progressive 3-in-a-Row Pump + Money-Hurt Reaction every time a coin drops inside!
+    const receiveCoinInSlot = (coinX: number, coinY: number, amount: number, isSlotDirect: boolean, coinPower = 0) => {
       const s = simRef.current;
       if (s.bossAction === 'BREAKING') return;
 
       const piggyCenterY = FLOOR_Y + s.py + (545 + 46 * s.ballMorph - 911) * PIGGY_SCALE;
 
-      // 1. Progressive Pump (resets pressure bleed timer on direct slot drops!)
+      // 1. 3-in-a-Row Pump (only direct slot drops fill the row & keep pressure pumped!)
       if (s.phase === 'PLAYING') {
-        s.pumpProgress = Math.min(s.pumpTarget, s.pumpProgress + amount);
-        const ratio = s.pumpProgress / s.pumpTarget;
-        s.bellyGoal = Math.max(s.bellyGoal, 0.04 + ratio * 1.06);
-
         if (isSlotDirect) {
+          s.pumpProgress = Math.min(s.pumpTarget, s.pumpProgress + Math.max(1, Math.round(amount)));
           s.combo += 1;
           s.slotDrops += 1;
           s.sinceLastSlotHit = 0;
+          s.pumpHoldTimer = s.pumpHoldMax + coinPower * 1.1;
+
+          const ratio = s.pumpProgress / s.pumpTarget;
+          s.bellyGoal = Math.max(s.bellyGoal, 0.04 + ratio * 1.08);
+
+          if (s.pumpProgress >= 1 || s.combo >= 2) {
+            const wasCalm = s.nervousLevel < 0.35 && s.nervousPanicTimer <= 0;
+            s.nervousPanicTimer = Math.max(s.nervousPanicTimer, 2.5 + ratio * 1.8);
+            if (wasCalm) {
+              synthRef.current?.playNervousAlert();
+              spawnFloater(s.px, piggyCenterY - 88, 'NERVOUS!', '#DC2626', 24);
+            }
+            // Startle piggy into darting early if it is stopped and already nervous
+            if (s.nervousLevel > 0.4 && s.bossAction === 'PATTERN_STOP') {
+              s.bossTimer = Math.min(s.bossTimer, 0.16);
+            }
+          }
         }
-        const dollarVal = isSlotDirect ? 45 + Math.min(s.combo, 12) * 10 : 8;
+        const powerBonus = isSlotDirect && coinPower >= 0.42 ? Math.round(coinPower * 45) : 0;
+        const dollarVal = (isSlotDirect ? 65 + Math.min(s.combo, 12) * 15 : 8) + powerBonus;
         s.score += dollarVal;
         if (s.score > s.bestScore) {
           s.bestScore = s.score;
@@ -2388,16 +3698,23 @@ export function PiggyDuelPlugin({
         });
 
         // Money-Hurt Floating Text
+        const streakLabel =
+          s.pumpProgress >= s.pumpTarget
+            ? `3/3 BREAK! +$${dollarVal}!`
+            : `${s.pumpProgress}/3 IN A ROW! +$${dollarVal}`;
         spawnFloater(
           coinX + (Math.random() - 0.5) * 28,
           coinY - (isSlotDirect ? 42 : 24),
-          isSlotDirect ? `+$${dollarVal} IN SLOT!` : `+$${dollarVal} ARMOR`,
-          isSlotDirect ? '#15803D' : '#92400E',
-          isSlotDirect ? 24 : 15
+          isSlotDirect ? streakLabel : `+$${dollarVal} ARMOR`,
+          isSlotDirect ? (coinPower >= 0.72 ? '#0284C7' : '#15803D') : '#92400E',
+          isSlotDirect ? (coinPower >= 0.72 ? 26 : 24) : 15
         );
       } else {
         // Title screen preview pump
         s.bellyGoal = s.bellyGoal >= 0.98 ? 0.04 : Math.min(1.0, s.bellyGoal + 0.12);
+        if (s.bellyGoal >= 0.5) {
+          s.nervousPanicTimer = Math.max(s.nervousPanicTimer, 2.2);
+        }
         spawnFloater(coinX, coinY - 36, isSlotDirect ? '+$$ IN SLOT!' : 'CLANG!', isSlotDirect ? '#15803D' : '#92400E', 22);
       }
 
@@ -2425,15 +3742,75 @@ export function PiggyDuelPlugin({
         synthRef.current?.playArmorClank();
       }
 
-      // 4. Did it pump enough to BREAK?!
+      // 4. Did it pump enough to BREAK?! -> Launch Heavy Premium Mechanical Disassembly!
       if (s.phase === 'PLAYING' && s.pumpProgress >= s.pumpTarget) {
         s.bossAction = 'BREAKING';
-        s.breakTimer = 1.05;
+        s.breakMax = 2.75;
+        s.breakTimer = 2.75;
+        s.breakStage = 0;
+        s.breakPx = s.px;
+        s.breakPy = s.py;
+        s.breakDir = s.dir;
         s.piggiesBroken += 1;
-        s.bellyGoal = 1.28;
-        s.bellyVel = 0.45;
+        s.bellyGoal = 1.32;
+        s.bellyVel = 0.72;
         s.projectiles = [];
-        s.shakeTimer = 0.45;
+        s.hitStop = 0.095;
+        s.shakeTimer = 0.38;
+        const dirSign = s.breakDir > 0 ? -1 : 1;
+        const mkPart = (
+          id: string,
+          el: SVGGElement | null,
+          cx: number,
+          cy: number,
+          r: number,
+          mass: number,
+          detachAt: number,
+          vxLocal: number,
+          vy: number,
+          vrot: number,
+          bounce = 0.28,
+          unscrew = false
+        ): DisassemblyPart => ({
+          id,
+          el,
+          cx,
+          cy,
+          r,
+          mass,
+          detachAt,
+          vx: dirSign * vxLocal,
+          vy,
+          vrot,
+          bounce,
+          wx0: s.breakPx + dirSign * (cx - 550) * PIGGY_SCALE,
+          wy0: FLOOR_Y + s.breakPy + (cy - 911) * PIGGY_SCALE,
+          wx: s.breakPx + dirSign * (cx - 550) * PIGGY_SCALE,
+          wy: FLOOR_Y + s.breakPy + (cy - 911) * PIGGY_SCALE,
+          rot: 0,
+          detached: false,
+          clangs: 0,
+          unscrew,
+        });
+
+        s.disassemblyParts = [
+          mkPart('topScrew', s.topScrewWrap, 478, 186, 17, 0.75, 0.21, -180, -820, 960, 0.48, true),
+          mkPart('leftPauldron', s.leftPauldron, 340, 322, 28, 1.55, 0.34, -430, -490, -320, 0.26),
+          mkPart('rightPauldron', s.rightPauldronWrap, 600, 212, 26, 1.45, 0.35, 450, -470, 340, 0.26),
+          mkPart('slotPlate', s.slotEjectWrap, 575, 395, 31, 1.75, 0.36, -110, -640, -240, 0.24),
+          mkPart('leftArm', s.leftArmTuck, 235, 445, 33, 1.65, 0.37, -490, -310, -290, 0.24),
+          mkPart('rightArm', s.rightArmTuck, 715, 175, 33, 1.65, 0.38, 500, -320, 300, 0.24),
+          mkPart('tail', s.tailEjectWrap, 735, 645, 20, 0.9, 0.39, 570, -440, 680, 0.5),
+          mkPart('jet', s.jetTuckWrap, 755, 672, 25, 1.25, 0.4, 620, -590, 440, 0.34),
+          mkPart('chestHull', s.torsoChestWrap, 515, 420, 54, 2.7, 0.42, -230, -410, -130, 0.18),
+          mkPart('bellyDome', s.torsoBellyWrap, 575, 635, 48, 2.5, 0.44, 240, -330, 145, 0.19),
+          mkPart('pelvisBase', s.torsoPelvisWrap, 575, 725, 36, 2.35, 0.46, -75, -210, -95, 0.17),
+          mkPart('legBack', s.leg1Wrap, 622, 835, 23, 1.5, 0.47, 300, -260, 230, 0.26),
+          mkPart('legFront', s.leg0Wrap, 498, 845, 23, 1.5, 0.48, -280, -250, -215, 0.26),
+        ];
+
+        spawnMechanicalDebris(s.breakPx, piggyCenterY - 45, 7, 0.72, 'screws');
+
         const breakBonus = 400 * s.round;
         s.score += breakBonus;
         if (s.score > s.bestScore) {
@@ -2451,9 +3828,9 @@ export function PiggyDuelPlugin({
           piggiesBroken: s.piggiesBroken,
           slotDrops: s.slotDrops,
         });
-        synthRef.current?.playPiggyBreak();
-        spawnMoneyHurtFx(s.px, piggyCenterY, 34, 580);
-        spawnFloater(s.px, piggyCenterY - 120, `PIGGY BROKEN! +$${breakBonus}!`, '#15803D', 36);
+        synthRef.current?.playDisassemblyStart();
+        spawnMoneyHurtFx(s.px, piggyCenterY, 16, 420);
+        spawnFloater(s.px, piggyCenterY - 128, `DISASSEMBLY! +$${breakBonus}!`, '#15803D', 36);
       }
     };
 
@@ -2493,7 +3870,29 @@ export function PiggyDuelPlugin({
         if (s.shakeTimer > 0) s.shakeTimer = Math.max(0, s.shakeTimer - rawDt);
         if (s.swallowTimer > 0) s.swallowTimer = Math.max(0, s.swallowTimer - rawDt);
         if (s.slotGlowTimer > 0) s.slotGlowTimer = Math.max(0, s.slotGlowTimer - rawDt);
+        if (s.nervousPanicTimer > 0) s.nervousPanicTimer = Math.max(0, s.nervousPanicTimer - rawDt);
+        if (s.dizzyTimer > 0) {
+          s.dizzyTimer = s.bossAction === 'BREAKING' ? 0 : Math.max(0, s.dizzyTimer - rawDt);
+        }
+        const targetDizzy = s.bossAction === 'BREAKING' || s.dizzyTimer <= 0 ? 0 : Math.min(1, s.dizzyTimer / 0.55);
+        s.dizzyLevel += (targetDizzy - s.dizzyLevel) * Math.min(1, rawDt * (targetDizzy > s.dizzyLevel ? 14 : 6.5));
+        if (s.dizzyLevel > 0.01) {
+          s.dizzyPhase += rawDt * (5.2 + 3.4 * s.dizzyLevel);
+        }
         s.slotReceiveTilt *= Math.max(0, 1 - rawDt * 10);
+
+        // Update Nervous Level (high fill pressure OR acute panic surge after rapid hits)
+        const nervousFillRatio = s.pumpTarget > 0 ? s.pumpProgress / s.pumpTarget : 0;
+        const pressureNervous =
+          s.phase === 'PLAYING' && nervousFillRatio >= 0.46
+            ? Math.min(1, (nervousFillRatio - 0.46) / 0.44)
+            : 0;
+        const panicNervous = s.nervousPanicTimer > 0 ? Math.min(1, 0.56 + s.nervousPanicTimer * 0.22) : 0;
+        const targetNervous =
+          s.bossAction === 'BREAKING' ? 0 : Math.max(pressureNervous, panicNervous);
+        s.nervousLevel +=
+          (targetNervous - s.nervousLevel) *
+          Math.min(1, rawDt * (targetNervous > s.nervousLevel ? 6.5 : 2.1));
 
         // Smooth cylinder rotation per fired chamber & threshold reload sweep
         s.cylinderAngle += (s.cylinderTargetAngle - s.cylinderAngle) * Math.min(1, rawDt * 22);
@@ -2516,15 +3915,153 @@ export function PiggyDuelPlugin({
           }
         }
 
+        // Tap-Hop, Hold-Charge Power Meter, Low-to-Top Laser Climb & Progressive Tap-Grow Physics
+        if (s.laserIgniteFlash > 0) {
+          s.laserIgniteFlash = Math.max(0, s.laserIgniteFlash - rawDt * 6.5);
+        }
+        if (s.handHoldActive && (s.phase === 'PLAYING' || s.phase === 'TITLE_MENU')) {
+          s.handHoldDuration += rawDt;
+          s.laserGrow = Math.min(1, s.handHoldDuration / 0.85);
+          s.laserHoldSnapshot = s.laserGrow;
+          s.laserFadeTimer = 0;
+          const curProfile = LASER_PROFILES[s.laserStyle];
+          const fBoost = s.difficulty === 'FRENZY' ? 1.15 : 1.0;
+          const syncFocusDamp = s.slingLocked ? 0.46 : 1.0;
+          const elevClimbRate = (0.62 + curProfile.sweepRate * 0.075) * fBoost * syncFocusDamp;
+          s.laserElev = Math.min(1, s.laserElev + rawDt * elevClimbRate);
+
+          const prevStep = s.handChargeStep;
+          if (s.handHoldDuration >= 0.14) {
+            s.handCharge = Math.min(1, (s.handHoldDuration - 0.14) / 0.85);
+            const nextStep = s.handCharge >= 0.98 ? 3 : s.handCharge >= 0.65 ? 2 : s.handCharge >= 0.3 ? 1 : 0;
+            if (nextStep > prevStep) {
+              s.handChargeStep = nextStep;
+              synthRef.current?.playChargeTick(nextStep);
+            }
+          }
+          // Pull back & tense slightly along aim vector while charging
+          const aimState = getSlingLaunchState();
+          const pullMag = 14 * Math.max(s.handCharge, s.laserElev * 0.45);
+          const pullTargetX = -Math.cos(aimState.launchAngle) * pullMag + (s.handCharge > 0.7 ? Math.sin(now * 0.08) * 2.2 * s.handCharge : 0);
+          const pullTargetY = -Math.sin(aimState.launchAngle) * pullMag + (s.handCharge > 0.7 ? Math.cos(now * 0.09) * 2.2 * s.handCharge : 0);
+          s.handOffsetX += (pullTargetX - s.handOffsetX) * Math.min(1, rawDt * 18);
+          s.handOffsetY += (pullTargetY - s.handOffsetY) * Math.min(1, rawDt * 18);
+          s.handScaleX += (1 + 0.14 * s.handCharge - s.handScaleX) * Math.min(1, rawDt * 14);
+          s.handScaleY += (1 - 0.14 * s.handCharge - s.handScaleY) * Math.min(1, rawDt * 14);
+          s.handTiltDeg += (-s.facing * 24 * s.handCharge - s.handTiltDeg) * Math.min(1, rawDt * 14);
+
+          if (s.handCharge > 0.15) {
+            s.handChargeTrailAcc += rawDt;
+            if (s.handChargeTrailAcc >= 0.05) {
+              s.handChargeTrailAcc = 0;
+              const ang = Math.random() * Math.PI * 2;
+              const rad = 46 - s.handCharge * 18;
+              s.particles.push({
+                x: s.cx + s.handOffsetX + Math.cos(ang) * rad,
+                y: s.cy + s.handHopY + s.handOffsetY + Math.sin(ang) * rad,
+                vx: -Math.cos(ang) * 95,
+                vy: -Math.sin(ang) * 95,
+                r: 2.2 + s.handCharge * 1.4,
+                color: s.handCharge >= 0.78 ? 'rgba(253, 224, 71, 0.85)' : 'rgba(56, 189, 248, 0.78)',
+                life: 0.22,
+                maxLife: 0.22,
+                gravity: 0,
+                kind: 'gleam',
+                rot: Math.random() * 90,
+                vrot: 240,
+                drag: 2,
+              });
+            }
+          }
+        } else {
+          if (s.laserFadeTimer > 0) {
+            s.laserFadeTimer = Math.max(0, s.laserFadeTimer - rawDt);
+            if (s.laserFadeTimer <= 0) {
+              s.laserElev = 0;
+              s.laserGrow = 0;
+            }
+          } else {
+            s.laserElev += (0 - s.laserElev) * Math.min(1, rawDt * 12);
+            if (s.laserElev < 0.002) s.laserElev = 0;
+            s.laserGrow = 0;
+          }
+          s.handOffsetX += (0 - s.handOffsetX) * Math.min(1, rawDt * 14);
+          s.handOffsetY += (0 - s.handOffsetY) * Math.min(1, rawDt * 14);
+          s.handScaleX += (1 - s.handScaleX) * Math.min(1, rawDt * 14);
+          s.handScaleY += (1 - s.handScaleY) * Math.min(1, rawDt * 14);
+        }
+
+        // Quick-tap vertical hop physics
+        if (s.handHopY < 0 || s.handHopVy !== 0) {
+          s.handHopVy += 2850 * rawDt;
+          s.handHopY += s.handHopVy * rawDt;
+          if (s.handHopY >= 0) {
+            const impactSpd = Math.abs(s.handHopVy);
+            s.handHopY = 0;
+            s.handHopVy = 0;
+            if (impactSpd > 140) {
+              s.handScaleX = 1.18;
+              s.handScaleY = 0.84;
+            }
+          }
+        }
+
+        // Hand collider timers & recoil damping
+        if (s.handColCooldown > 0) s.handColCooldown = Math.max(0, s.handColCooldown - rawDt);
+        if (s.handShieldFlash > 0) s.handShieldFlash = Math.max(0, s.handShieldFlash - rawDt);
+        s.handScrapeFxAcc += rawDt;
+
+        // Extended glide + dash-hold air glide + collision-safe hand movement
+        let nextHandX = s.cx;
+        let nextHandY = s.cy;
         if (s.dashTimer > 0) {
           s.dashTimer = Math.max(0, s.dashTimer - rawDt);
-          s.cx = Math.max(30, Math.min(WORLD_W - 30, s.cx + s.dashVx * rawDt));
-          s.cy = Math.max(30, Math.min(WORLD_H - 30, s.cy + s.dashVy * rawDt));
-          s.afterimages.push({ x: s.cx, y: s.cy, life: 0.18, maxLife: 0.18 });
+          nextHandX = s.cx + s.dashVx * rawDt;
+          nextHandY = s.cy + s.dashVy * rawDt;
+          s.afterimages.push({ x: s.cx, y: s.cy + s.handHopY, life: 0.18, maxLife: 0.18 });
+          if (s.dashTimer <= 0 && s.dashHolding && s.dashGlideFuel > 0) {
+            s.handGlideTimer = Math.max(s.handGlideTimer, 0.2);
+            s.handGlideVx = s.dashVx * 0.34;
+            s.handGlideVy = s.dashVy * 0.34;
+          }
+        } else if (s.dashHolding && s.dashGlideFuel > 0 && s.phase === 'PLAYING') {
+          s.dashGlideFuel = Math.max(0, s.dashGlideFuel - rawDt);
+          s.handGlideTimer = Math.max(s.handGlideTimer, 0.12);
+          nextHandX = s.cx + (s.targetCx - s.cx) * Math.min(1, rawDt * 12) + s.handGlideVx * rawDt * 0.35;
+          nextHandY = s.cy + (s.targetCy - s.cy) * Math.min(1, rawDt * 12) + s.handGlideVy * rawDt * 0.35;
+          s.handGlideVx *= Math.max(0, 1 - rawDt * 2.5);
+          s.handGlideVy *= Math.max(0, 1 - rawDt * 2.5);
+          s.afterimages.push({ x: s.cx, y: s.cy + s.handHopY, life: 0.22, maxLife: 0.22 });
+        } else if (s.handGlideTimer > 0) {
+          s.handGlideTimer = Math.max(0, s.handGlideTimer - rawDt);
+          nextHandX = s.cx + (s.targetCx - s.cx) * Math.min(1, rawDt * 13) + s.handGlideVx * rawDt * 0.22;
+          nextHandY = s.cy + (s.targetCy - s.cy) * Math.min(1, rawDt * 13) + s.handGlideVy * rawDt * 0.22;
+          s.handGlideVx *= Math.max(0, 1 - rawDt * 4.5);
+          s.handGlideVy *= Math.max(0, 1 - rawDt * 4.5);
+          if (Math.random() < 0.5) {
+            s.afterimages.push({ x: s.cx + s.handOffsetX, y: s.cy + s.handHopY + s.handOffsetY, life: 0.2, maxLife: 0.2 });
+          }
+        } else if (s.handHoldActive) {
+          // Focus-glide smoothing while holding & charging power meter
+          const glideTrackRate = 24 - s.handCharge * 11;
+          nextHandX = s.cx + (s.targetCx - s.cx) * Math.min(1, rawDt * glideTrackRate);
+          nextHandY = s.cy + (s.targetCy - s.cy) * Math.min(1, rawDt * glideTrackRate);
         } else {
-          s.cx = s.targetCx;
-          s.cy = s.targetCy;
+          nextHandX = s.targetCx;
+          nextHandY = s.targetCy;
         }
+
+        if (Math.abs(s.handBounceVx) > 2 || Math.abs(s.handBounceVy) > 2) {
+          nextHandX += s.handBounceVx * rawDt;
+          nextHandY += s.handBounceVy * rawDt;
+          const bDamp = Math.max(0, 1 - rawDt * 14);
+          s.handBounceVx *= bDamp;
+          s.handBounceVy *= bDamp;
+        } else {
+          s.handBounceVx = 0;
+          s.handBounceVy = 0;
+        }
+        moveHandWithCollision(nextHandX, nextHandY, rawDt, false);
 
         const cDx = s.cx - s.prevCx;
         const cDy = s.cy - s.prevCy;
@@ -2533,71 +4070,46 @@ export function PiggyDuelPlugin({
         s.prevCx = s.cx;
         s.prevCy = s.cy;
 
-        // Varied Targeting Laser Oscillator & Auto-Cycle Update
-        if (s.laserModeSetting === 'AUTO' && s.phase === 'PLAYING') {
+        // Smooth velocity-banked tilt when not charging
+        if (!s.handHoldActive) {
+          const bankTarget = Math.max(-18, Math.min(18, s.velX * 0.012));
+          s.handTiltDeg += (bankTarget - s.handTiltDeg) * Math.min(1, rawDt * 12);
+        }
+
+        // Deterministic Varied Laser Profile Cycling (Zero random oscillation)
+        if (s.laserModeSetting === 'AUTO' && s.phase === 'PLAYING' && !s.handHoldActive) {
           s.laserSwitchTimer -= rawDt;
           if (s.laserSwitchTimer <= 0) {
-            s.laserSwitchTimer = 4.2 + Math.random() * 2.4;
+            s.laserSwitchTimer = 5.0;
             s.laserIndex = (s.laserIndex + 1) % LASER_STYLE_ORDER.length;
             applyLaserStyle(LASER_STYLE_ORDER[s.laserIndex], true);
           }
         }
         const curLaserProfile = LASER_PROFILES[s.laserStyle];
-        s.slingMorphTimer -= rawDt;
-        if (s.slingMorphTimer <= 0) {
-          s.slingMorphTimer = 1.15 + Math.random() * 1.25;
-          const fBoost = s.difficulty === 'FRENZY' ? 1.24 : 1.0;
-          s.slingTargetSpeed = curLaserProfile.sweepRate * (0.85 + Math.random() * 0.35) * fBoost;
-          s.slingTargetSubSpeed = curLaserProfile.subRate * (0.85 + Math.random() * 0.35) * fBoost;
-          s.slingTargetAngleSpan = curLaserProfile.angleSpan * (0.86 + Math.random() * 0.3);
-          s.slingTargetPowerBias = (Math.random() - 0.5) * 0.32;
-        }
-        s.slingSpeed += (s.slingTargetSpeed - s.slingSpeed) * Math.min(1, rawDt * 2.8);
-        s.slingSubSpeed += (s.slingTargetSubSpeed - s.slingSubSpeed) * Math.min(1, rawDt * 2.8);
-        s.slingAngleSpan += (s.slingTargetAngleSpan - s.slingAngleSpan) * Math.min(1, rawDt * 2.5);
-        s.slingPowerBias += (s.slingTargetPowerBias - s.slingPowerBias) * Math.min(1, rawDt * 2.5);
-        s.slingPhase += rawDt * s.slingSpeed;
-        s.slingSubPhase += rawDt * s.slingSubSpeed;
+        s.slingSpeed += (curLaserProfile.sweepRate - s.slingSpeed) * Math.min(1, rawDt * 6);
+        s.slingPhase += rawDt * (s.slingSpeed + s.laserElev * 2.4);
 
-        if ((s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') && s.throwHolding && s.throwCooldown <= 0 && !s.isReloading && s.revolverChambers > 0) {
-          throwCoin(true);
-        }
-
-        const isThrowing = s.throwAnimTimer > 0 || s.dashTimer > 0;
+        const isThrowing = s.throwAnimTimer > 0 || s.dashTimer > 0 || s.handGlideTimer > 0;
         const row = isThrowing ? 1 : 0;
         let col = 0;
         if (isThrowing) {
           const p = 1 - Math.max(0, s.throwAnimTimer) / 0.13;
           col = Math.min(SPRITE_COLS - 1, Math.floor(p * SPRITE_COLS));
+        } else if (s.handHoldActive && s.handCharge > 0.05) {
+          // Lock hand sprite to wind-up pinch frame as charge builds
+          col = Math.min(SPRITE_COLS - 1, Math.floor(s.handCharge * (SPRITE_COLS - 1)));
         } else {
           s.spriteFrameTime += rawDt * (cSpeed > 220 ? 13 : 7);
           col = Math.floor(s.spriteFrameTime) % SPRITE_COLS;
         }
 
-        const box = stageBoxRef.current;
-        const wrap = cursorWrapRef.current;
-        const imgEl = spriteImgRef.current;
-
-        if (box && wrap) {
-          const rect = box.getBoundingClientRect();
-          const pxX = (s.cx / WORLD_W) * rect.width;
-          const pxY = (s.cy / WORLD_H) * rect.height;
-          wrap.style.transform = `translate3d(${pxX.toFixed(1)}px, ${pxY.toFixed(1)}px, 0)`;
-          wrap.style.opacity = '1';
-        }
-        if (imgEl && (s.lastSpriteCol !== col || s.lastSpriteRow !== row)) {
-          s.lastSpriteCol = col;
-          s.lastSpriteRow = row;
-          imgEl.style.transform = `translate3d(${-col * 20}%, ${-row * 50}%, 0)`;
-        }
-
-        // 2. Pattern-Based Evasive Movement AI + Bouncy Ball State (Never hits cursor!)
-        const piggyCenterY = FLOOR_Y + s.py + (545 + 46 * s.ballMorph - 911) * PIGGY_SCALE;
+        // 2. Pattern-Based Evasive Movement AI + Bouncy Ball State (with solid Hand Collider!)
+        const piggyCenterY = getBallWorldCenterY();
         const slotPos = getSlotHolePos();
         const prevFramePx = s.px;
 
         if (s.bossAction === 'BOUNCY_BALL') {
-          s.ballMorph += (1 - s.ballMorph) * Math.min(1, dt * 11);
+          s.ballMorph += (1 - s.ballMorph) * Math.min(1, dt * 13);
         } else {
           s.ballMorph += (0 - s.ballMorph) * Math.min(1, dt * 10);
           s.ballAngle += (0 - s.ballAngle) * Math.min(1, dt * 10);
@@ -2606,92 +4118,371 @@ export function PiggyDuelPlugin({
         if (s.phase === 'PLAYING') {
           const pat = ROUND_PATTERNS[s.patternIndex % ROUND_PATTERNS.length];
 
-          // Gentle idle pressure vent if player hasn't landed a slot coin in 3.2s
+          // Periodic crimson warning steam & sparks when nervous
+          if (s.nervousLevel > 0.22 && s.bossAction !== 'BREAKING') {
+            s.bellyVel += Math.sin(now * 0.026) * 0.009 * s.nervousLevel;
+            s.nervousSteamAcc += dt * (0.7 + s.nervousLevel * 1.8);
+            if (s.nervousSteamAcc >= 0.34) {
+              s.nervousSteamAcc = 0;
+              const steamAng = -Math.PI * 0.5 + (Math.random() - 0.5) * 1.4;
+              const steamSpd = 120 + Math.random() * 140 * s.nervousLevel;
+              s.particles.push({
+                x: slotPos.x + (Math.random() - 0.5) * 34,
+                y: slotPos.y - 10,
+                vx: Math.cos(steamAng) * steamSpd,
+                vy: Math.sin(steamAng) * steamSpd,
+                r: 2.6 + Math.random() * 2.2,
+                color: Math.random() < 0.65 ? 'rgba(239, 68, 68, 0.78)' : 'rgba(251, 146, 60, 0.75)',
+                life: 0.32,
+                maxLife: 0.32,
+                gravity: -40,
+                kind: Math.random() < 0.45 ? 'gleam' : 'dot',
+                rot: Math.random() * 90,
+                vrot: (Math.random() - 0.5) * 300,
+                drag: 3.2,
+              });
+            }
+          }
+
+          // Keep-Pumped Pressure Hold Countdown (drains slower in Bouncy Ball or during reload; vents & resets streak if it runs dry!)
           if (s.bossAction !== 'BREAKING' && s.pumpProgress > 0) {
             s.sinceLastSlotHit += dt;
-            if (s.sinceLastSlotHit > 3.2) {
-              s.pumpProgress = Math.max(0, s.pumpProgress - 0.28 * dt);
-              const ratio = s.pumpProgress / s.pumpTarget;
-              s.bellyGoal = Math.max(0.02, 0.04 + ratio * 1.06);
+            const drainScale = s.bossAction === 'BOUNCY_BALL' ? 0.42 : s.isReloading ? 0.45 : 1.0;
+            s.pumpHoldTimer = Math.max(0, s.pumpHoldTimer - dt * drainScale);
+
+            const holdRatio = s.pumpHoldMax > 0 ? Math.min(1, s.pumpHoldTimer / s.pumpHoldMax) : 0;
+            const baseBelly = 0.04 + (s.pumpProgress / s.pumpTarget) * 1.08;
+            s.bellyGoal = Math.max(0.04, baseBelly * (0.55 + 0.45 * holdRatio));
+
+            if (holdRatio < 0.55) {
               s.pressureBleedFxAcc += dt;
-              if (s.pressureBleedFxAcc >= 0.45) {
+              if (s.pressureBleedFxAcc >= 0.36) {
                 s.pressureBleedFxAcc = 0;
-                spawnDustPuff(slotPos.x, slotPos.y - 6, s.dir, 1, 55);
+                spawnDustPuff(slotPos.x, slotPos.y - 6, s.dir, 2, 75);
               }
+            }
+
+            if (s.pumpHoldTimer <= 0) {
+              s.pumpProgress = 0;
+              s.combo = 0;
+              s.bellyGoal = 0.04;
+              s.nervousPanicTimer = 0;
+              spawnDustPuff(slotPos.x, slotPos.y - 8, s.dir, 5, 165);
+              spawnFloater(s.px, piggyCenterY - 96, 'VENTED! KEEP PUMPED (0/3)', '#DC2626', 18);
+              synthRef.current?.playArmorClank();
             }
           }
 
           if (s.bossAction === 'BREAKING') {
             s.walkM = 0;
+            s.ballMorph = Math.max(0, s.ballMorph - dt * 10);
+            const prevElapsed = s.breakMax - s.breakTimer;
             s.breakTimer -= dt;
-            if (Math.random() < 0.55) {
-              spawnMoneyHurtFx(s.px + (Math.random() - 0.5) * 90, piggyCenterY, 3, 480);
+            const elapsed = s.breakMax - s.breakTimer;
+            const dirSign = s.breakDir > 0 ? -1 : 1;
+
+            // Beat 1 (0..0.38s): Unscrewing pressure bolts, steam jets & seam sparks
+            if (s.breakStage === 0) {
+              if (prevElapsed < 0.16 && elapsed >= 0.16) {
+                spawnMechanicalDebris(s.breakPx, piggyCenterY - 12, 8, 0.82, 'screws');
+              }
+              if (Math.random() < 0.72) {
+                spawnDustPuff(
+                  s.breakPx + (Math.random() - 0.5) * 85,
+                  piggyCenterY + (Math.random() - 0.5) * 90,
+                  Math.random() < 0.5 ? -1 : 1,
+                  2,
+                  280
+                );
+              }
+              if (Math.random() < 0.55) {
+                s.particles.push({
+                  x: s.breakPx + (Math.random() - 0.5) * 70,
+                  y: piggyCenterY + (Math.random() - 0.5) * 70,
+                  vx: (Math.random() - 0.5) * 520,
+                  vy: -160 - Math.random() * 340,
+                  r: 3.5 + Math.random() * 3.5,
+                  color: Math.random() < 0.5 ? '#FEF08A' : '#F97316',
+                  life: 0.25 + Math.random() * 0.2,
+                  maxLife: 0.45,
+                  gravity: 480,
+                  kind: 'gleam',
+                });
+              }
             }
+
+            // Beat 2 (0.36s): CORE DETONATION! Heavy hull plates & hardware blast outward
+            if (s.breakStage === 0 && elapsed >= 0.36) {
+              s.breakStage = 1;
+              s.shakeTimer = 0.48;
+              synthRef.current?.playPiggyBreak();
+              s.shockwaves.push(
+                {
+                  x: s.breakPx,
+                  y: piggyCenterY,
+                  r: 28,
+                  maxR: 350,
+                  life: 0.44,
+                  maxLife: 0.44,
+                  color: '#FEF08A',
+                  lineWidth: 12,
+                },
+                {
+                  x: s.breakPx,
+                  y: piggyCenterY,
+                  r: 18,
+                  maxR: 260,
+                  life: 0.36,
+                  maxLife: 0.36,
+                  color: '#F59E0B',
+                  lineWidth: 6.5,
+                }
+              );
+              spawnMoneyHurtFx(s.breakPx, piggyCenterY, 26, 610);
+              spawnMechanicalDebris(s.breakPx, piggyCenterY, 34, 1.05, 'burst');
+            }
+
+            // Beat 3 (0.98s): Exposed inner clockwork boiler core secondary burst
+            if (s.breakStage === 1 && elapsed >= 0.98) {
+              s.breakStage = 2;
+              s.shakeTimer = 0.28;
+              synthRef.current?.playCoreBurst();
+              s.shockwaves.push({
+                x: s.breakPx,
+                y: piggyCenterY,
+                r: 20,
+                maxR: 270,
+                life: 0.38,
+                maxLife: 0.38,
+                color: '#F97316',
+                lineWidth: 8.5,
+              });
+              spawnMoneyHurtFx(s.breakPx, piggyCenterY, 22, 540);
+              spawnMechanicalDebris(s.breakPx, piggyCenterY, 24, 0.9, 'burst');
+            }
+
+            // Heavy ballistic integration + floor slam weight, shock rings, sparks & skid friction
+            for (const dp of s.disassemblyParts) {
+              if (elapsed < dp.detachAt) continue;
+              if (!dp.detached) {
+                dp.detached = true;
+                dp.wx0 = s.breakPx + dirSign * (dp.cx - 550) * PIGGY_SCALE;
+                dp.wy0 = FLOOR_Y + s.breakPy + (dp.cy - 911) * PIGGY_SCALE;
+                dp.wx = dp.wx0;
+                dp.wy = dp.wy0;
+                if (dp.id === 'topScrew') {
+                  dp.wy -= 26;
+                  synthRef.current?.playPartClang(1.55);
+                }
+              }
+              // Jet thruster sputters upward/forward briefly after snapping free
+              if (dp.id === 'jet' && elapsed < 1.15) {
+                dp.vy -= 420 * dt;
+                if (Math.random() < 0.75) {
+                  s.particles.push({
+                    x: dp.wx,
+                    y: dp.wy,
+                    vx: (Math.random() - 0.5) * 140,
+                    vy: 90 + Math.random() * 140,
+                    r: 4 + Math.random() * 4,
+                    color: Math.random() < 0.5 ? '#FB923C' : '#FDE047',
+                    life: 0.24,
+                    maxLife: 0.24,
+                    gravity: -60,
+                    kind: 'dot',
+                  });
+                }
+              }
+
+              const partGravity = 1660 + dp.mass * 320;
+              dp.vy += partGravity * dt;
+              dp.wx += dp.vx * dt;
+              dp.wy += dp.vy * dt;
+              dp.rot += dp.vrot * dt;
+
+              if (dp.wx < MIN_X + 18) {
+                dp.wx = MIN_X + 18;
+                dp.vx = Math.abs(dp.vx) * 0.55;
+                dp.vrot *= -0.6;
+              } else if (dp.wx > MAX_X - 18) {
+                dp.wx = MAX_X - 18;
+                dp.vx = -Math.abs(dp.vx) * 0.55;
+                dp.vrot *= -0.6;
+              }
+
+              const floorContactY = FLOOR_Y - dp.r;
+              if (dp.wy >= floorContactY) {
+                dp.wy = floorContactY;
+                const impSpeed = Math.abs(dp.vy);
+                if (impSpeed > 95) {
+                  dp.vy = -impSpeed * dp.bounce;
+                  dp.vx *= dp.mass >= 1.5 ? 0.62 : 0.72;
+                  dp.vrot *= dp.mass >= 1.5 ? 0.44 : 0.6;
+                  if (impSpeed > 155) {
+                    const dustCount = dp.mass >= 1.9 ? 6 : 3;
+                    spawnDustPuff(dp.wx, FLOOR_Y - 3, dp.vx >= 0 ? 1 : -1, dustCount, 145 + dp.mass * 35);
+                    if (dp.mass >= 1.5 && impSpeed > 260) {
+                      s.landingRings.push({
+                        x: dp.wx,
+                        y: FLOOR_Y + 3,
+                        rx: dp.r * 0.75,
+                        maxRx: dp.r * (1.5 + dp.mass * 0.42),
+                        life: 0.26,
+                        maxLife: 0.26,
+                        color: 'rgba(180, 83, 9, 0.34)',
+                      });
+                      for (let sp = 0; sp < 4; sp++) {
+                        s.particles.push({
+                          x: dp.wx + (Math.random() - 0.5) * dp.r,
+                          y: FLOOR_Y - 4,
+                          vx: (Math.random() - 0.5) * 320,
+                          vy: -90 - Math.random() * 190,
+                          r: 2.2 + Math.random() * 2,
+                          color: sp % 2 === 0 ? '#FEF08A' : '#F59E0B',
+                          life: 0.2 + Math.random() * 0.14,
+                          maxLife: 0.34,
+                          gravity: 780,
+                          kind: 'gleam',
+                        });
+                      }
+                    }
+                    if (dp.clangs < 2) {
+                      dp.clangs += 1;
+                      if (dp.mass >= 1.45 && dp.clangs === 1) {
+                        s.shakeTimer = Math.max(s.shakeTimer, Math.min(0.18, 0.055 * dp.mass));
+                        synthRef.current?.playHeavyPartThud(dp.mass);
+                      } else {
+                        synthRef.current?.playPartClang(0.76 + (dp.clangs === 1 ? 0.14 : 0.34) + Math.random() * 0.14);
+                      }
+                    }
+                  }
+                } else {
+                  dp.vy = 0;
+                  dp.vx *= Math.max(0, 1 - dt * (7 + dp.mass * 2.5));
+                  dp.vrot *= Math.max(0, 1 - dt * (8 + dp.mass * 2.5));
+                }
+              }
+            }
+
             if (s.breakTimer <= 0) {
               s.bossAction = 'PATTERN_STOP';
               s.phase = 'WHITEPAPER';
               s.throwHolding = false;
               s.projectiles = [];
+              s.disassemblyParts = [];
+              s.debrisItems = [];
+              s.shockwaves = [];
               setWpTab('PDF');
               setPhase('WHITEPAPER');
             }
           } else if (s.bossAction === 'BOUNCY_BALL') {
+            const nv = s.nervousLevel;
+            const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.45, 1 - 0.5 * s.dizzyLevel) : 1;
             s.walkM = 0;
-            s.ballTimer -= dt;
-            s.ballVy += 1740 * dt;
+            s.ballTimer -= dt * dizzyPace;
+            s.ballVy += (1740 + nv * 320) * dt;
             s.px += s.ballVx * dt;
             s.py += s.ballVy * dt;
             s.ballAngle += s.ballSpin * dt;
             s.alt = Math.max(0, -s.py / PIGGY_SCALE);
             s.goalAlt = s.alt;
             s.vAlt = -s.ballVy / PIGGY_SCALE;
+            const ballRWorld = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE;
 
-            // Elastic arena wall bounces
+            // Elastic arena wall bounces with rubber wall-squash & echo
             if (s.px <= MIN_X) {
+              const wallImp = Math.min(1.4, Math.abs(s.ballVx) / 520);
               s.px = MIN_X;
-              s.ballVx = Math.abs(s.ballVx) * (0.94 + Math.random() * 0.14);
-              s.ballSpin = (s.ballVx >= 0 ? 1 : -1) * (460 + Math.random() * 300);
-              spawnCollisionFx(MIN_X - 42, piggyCenterY, 1, 0, '#F59E0B', false);
-              synthRef.current?.playBallBoing(1.1);
+              s.ballVx = Math.abs(s.ballVx) * (0.96 + Math.random() * 0.14 + nv * 0.08);
+              s.ballSpin = (s.ballVx >= 0 ? 1 : -1) * (490 + Math.random() * 320) * (1 + nv * 0.28);
+              s.spBallWall.x = Math.max(s.spBallWall.x, 0.2 * wallImp);
+              s.spBallWall.v += 5.2 * wallImp;
+              s.bellyVel += 0.24 * wallImp;
+              s.ballAfterimages.push({
+                x: s.px,
+                y: getBallWorldCenterY(),
+                r: ballRWorld,
+                sx: 0.78,
+                sy: 1.26,
+                rot: 0,
+                life: 0.26,
+                maxLife: 0.26,
+              });
+              spawnCollisionFx(MIN_X - ballRWorld * 0.65, piggyCenterY, 1, 0, nv > 0.45 ? '#EF4444' : '#F59E0B', true);
+              synthRef.current?.playBallBoing(1.1 + nv * 0.16);
             } else if (s.px >= MAX_X) {
+              const wallImp = Math.min(1.4, Math.abs(s.ballVx) / 520);
               s.px = MAX_X;
-              s.ballVx = -Math.abs(s.ballVx) * (0.94 + Math.random() * 0.14);
-              s.ballSpin = (s.ballVx >= 0 ? 1 : -1) * (460 + Math.random() * 300);
-              spawnCollisionFx(MAX_X + 42, piggyCenterY, -1, 0, '#F59E0B', false);
-              synthRef.current?.playBallBoing(1.1);
+              s.ballVx = -Math.abs(s.ballVx) * (0.96 + Math.random() * 0.14 + nv * 0.08);
+              s.ballSpin = (s.ballVx >= 0 ? 1 : -1) * (490 + Math.random() * 320) * (1 + nv * 0.28);
+              s.spBallWall.x = Math.max(s.spBallWall.x, 0.2 * wallImp);
+              s.spBallWall.v += 5.2 * wallImp;
+              s.bellyVel += 0.24 * wallImp;
+              s.ballAfterimages.push({
+                x: s.px,
+                y: getBallWorldCenterY(),
+                r: ballRWorld,
+                sx: 0.78,
+                sy: 1.26,
+                rot: 0,
+                life: 0.26,
+                maxLife: 0.26,
+              });
+              spawnCollisionFx(MAX_X + ballRWorld * 0.65, piggyCenterY, -1, 0, nv > 0.45 ? '#EF4444' : '#F59E0B', true);
+              synthRef.current?.playBallBoing(1.1 + nv * 0.16);
             }
 
-            // Ceiling deflection
+            // Ceiling deflection with elastic squash
             if (s.py <= -540) {
               s.py = -540;
-              s.ballVy = Math.abs(s.ballVy) * 0.88;
-              spawnCollisionFx(s.px, FLOOR_Y + s.py - 190, 0, 1, '#FBBF24', false);
-              synthRef.current?.playBallBoing(1.22);
+              s.ballVy = Math.abs(s.ballVy) * 0.9;
+              s.spBallSq.x = Math.max(s.spBallSq.x, 0.2);
+              s.spBallSq.v += 4.6;
+              s.bellyVel += 0.2;
+              spawnCollisionFx(s.px, FLOOR_Y + s.py - ballRWorld * 1.4, 0, 1, nv > 0.45 ? '#EF4444' : '#FBBF24', false);
+              synthRef.current?.playBallBoing(1.22 + nv * 0.16);
             }
 
-            // High-energy rubber-brass floor bounce
+            // High-energy rubber-brass floor bounce with deep elastic squash
             if (s.py >= 0) {
+              const impactSpeed = Math.abs(s.ballVy);
+              const imp = Math.max(0.7, Math.min(1.5, impactSpeed / 700));
               s.py = 0;
               if (s.ballTimer > 0) {
-                const keepDir = Math.random() < 0.72 ? (s.ballVx >= 0 ? 1 : -1) : (s.px < WORLD_W * 0.5 ? 1 : -1);
-                const hMag = (420 + Math.random() * 340) * (s.difficulty === 'FRENZY' ? 1.18 : 1.0);
+                const keepSameProb = Math.max(0.38, 0.72 - nv * 0.32);
+                const keepDir = Math.random() < keepSameProb ? (s.ballVx >= 0 ? 1 : -1) : (s.px < WORLD_W * 0.5 ? 1 : -1);
+                const hMag = (430 + Math.random() * 350) * (s.difficulty === 'FRENZY' ? 1.18 : 1.0) * (1 + nv * 0.24);
                 s.ballVx = keepDir * hMag;
-                s.ballVy = -(740 + Math.random() * 350);
-                s.ballSpin = keepDir * (500 + Math.random() * 320);
+                s.ballVy = -(780 + Math.random() * 350) * (1 + nv * 0.14);
+                s.ballSpin = keepDir * (540 + Math.random() * 340) * (1 + nv * 0.3);
+                s.spBallSq.x = Math.max(s.spBallSq.x, 0.24 * imp);
+                s.spBallSq.v += 5.4 * imp;
+                s.bellyVel += 0.34 * imp;
+                s.ballSquashContact = 1;
+                s.ballAfterimages.push({
+                  x: s.px,
+                  y: FLOOR_Y - ballRWorld * 0.85,
+                  r: ballRWorld,
+                  sx: 1.28,
+                  sy: 0.76,
+                  rot: 0,
+                  life: 0.3,
+                  maxLife: 0.3,
+                });
                 s.landingRings.push({
                   x: s.px,
                   y: FLOOR_Y + 4,
                   rx: 28,
-                  maxRx: 148,
-                  life: 0.34,
-                  maxLife: 0.34,
-                  color: 'rgba(217, 119, 6, 0.52)',
+                  maxRx: 162,
+                  life: 0.36,
+                  maxLife: 0.36,
+                  color: nv > 0.45 ? 'rgba(239, 68, 68, 0.62)' : 'rgba(217, 119, 6, 0.58)',
                 });
-                spawnDustPuff(s.px - 22, FLOOR_Y - 2, -1, 4, 190);
-                spawnDustPuff(s.px + 22, FLOOR_Y - 2, 1, 4, 190);
-                spawnCollisionFx(s.px, FLOOR_Y - 6, 0, -1, '#F59E0B', true);
-                s.shakeTimer = Math.max(s.shakeTimer, 0.06);
-                synthRef.current?.playBallBoing(0.95 + Math.random() * 0.2);
+                spawnDustPuff(s.px - 26, FLOOR_Y - 2, -1, 5, 210);
+                spawnDustPuff(s.px + 26, FLOOR_Y - 2, 1, 5, 210);
+                spawnCollisionFx(s.px, FLOOR_Y - 6, 0, -1, nv > 0.45 ? '#EF4444' : '#F59E0B', true);
+                s.shakeTimer = Math.max(s.shakeTimer, 0.065 + nv * 0.03);
+                synthRef.current?.playBallBoing(0.95 + Math.random() * 0.2 + nv * 0.15);
               } else {
                 // Ball timer finished cleanly on floor touch -> uncurl & resume pattern!
                 s.py = 0;
@@ -2700,14 +4491,73 @@ export function PiggyDuelPlugin({
                 s.vAlt = 0;
                 s.goalAlt = 0;
                 s.onGround = true;
+                s.spBallSq.v += 2.6;
+                s.ballSquashContact = 0.7;
                 s.ballAngle = ((((s.ballAngle % 360) + 540) % 360) - 180);
                 spawnLandingFx(s.px, 0.9);
                 advanceToNextPatternSpot(true);
               }
             }
+          } else if (s.bossAction === 'WALK') {
+            const nv = s.nervousLevel;
+            const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.45, 1 - 0.5 * s.dizzyLevel) : 1;
+            const walkMinX = MIN_X + 95;
+            const walkMaxX = MAX_X - 95;
+            const isIdleWalk = s.playerIdleTimer >= 2.0 && s.pumpProgress === 0;
+            const walkSpd = (isIdleWalk ? 205 : 265) * (s.difficulty === 'FRENZY' ? 1.14 : 1.0) * (1 + nv * 0.25) * dizzyPace;
+
+            s.goalAlt = 0;
+            if (s.alt <= 6) {
+              if (s.walkTurnPause > 0) {
+                s.walkTurnPause = Math.max(0, s.walkTurnPause - dt);
+                s.walkM += (0 - s.walkM) * Math.min(1, dt * 14);
+              } else {
+                s.px += s.dir * walkSpd * dt;
+                const targetWalk = Math.min(1.15, walkSpd / 235);
+                s.walkM += (targetWalk - s.walkM) * Math.min(1, dt * 10);
+                if (s.px <= walkMinX) {
+                  s.px = walkMinX;
+                  s.dir = 1;
+                  s.walkTurnPause = 0.16;
+                  s.spLean.v += 12;
+                } else if (s.px >= walkMaxX) {
+                  s.px = walkMaxX;
+                  s.dir = -1;
+                  s.walkTurnPause = 0.16;
+                  s.spLean.v -= 12;
+                }
+              }
+            } else {
+              s.walkM += (0 - s.walkM) * Math.min(1, dt * 8);
+            }
+
+            if (!isIdleWalk) {
+              if (s.walkTimer > 0) {
+                s.walkTimer -= dt * dizzyPace;
+              }
+              if (s.walkTimer <= 0 || nv >= 0.55) {
+                advanceToNextPatternSpot(true);
+              }
+            }
           } else if (s.bossAction === 'PATTERN_STOP') {
+            const nv = s.nervousLevel;
+            const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.42, 1 - 0.54 * s.dizzyLevel) : 1;
             s.walkM += (0 - s.walkM) * Math.min(1, dt * 12);
-            s.bossTimer -= dt;
+            s.bossTimer -= dt * (1 + nv * 0.55) * dizzyPace;
+
+            // Volatile nervous pacing & erratic direction glances while paused
+            if (nv > 0.2) {
+              s.nervousDartTimer -= dt;
+              if (s.nervousDartTimer <= 0) {
+                s.nervousDartTimer = 0.14 + Math.random() * (0.24 - nv * 0.12);
+                s.nervousJitterX = (Math.random() - 0.5) * 44 * nv;
+                if (s.bossTimer >= 0.28 && Math.random() < 0.55 * nv) {
+                  s.dir = Math.random() < 0.5 ? -1 : 1;
+                }
+              }
+            } else {
+              s.nervousJitterX *= Math.max(0, 1 - dt * 12);
+            }
 
             // Gentle subtle tell right before dashing to the next spot in the pattern
             const nextSpot = pat.spots[(s.spotIndex + 1) % pat.spots.length];
@@ -2716,21 +4566,31 @@ export function PiggyDuelPlugin({
               s.moveTargetAlt = nextSpot.alt;
             }
 
-            if (s.bossTimer <= 0) {
+            // If player does nothing, calmly enter WALK patrol state
+            if (s.playerIdleTimer >= 2.0 && s.pumpProgress === 0 && nv < 0.3) {
+              s.bossAction = 'WALK';
+              s.goalAlt = 0;
+              s.walkTimer = 0;
+              s.walkTurnPause = 0;
+            } else if (s.bossTimer <= 0) {
               advanceToNextPatternSpot();
             }
           } else {
             // Smoothly zip through space along the pattern route to the next stop spot
-            s.moveElapsed += dt;
+            const nv = s.nervousLevel;
+            const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.48, 1 - 0.48 * s.dizzyLevel) : 1;
+            s.moveElapsed += dt * dizzyPace;
             const u = Math.min(1, s.moveElapsed / Math.max(0.05, s.moveDuration));
             // Smooth cubic-quintic blend for realistic acceleration, cruise & deceleration
             const ease = u < 0.5 ? 16 * u * u * u * u * u : 1 - Math.pow(-2 * u + 2, 5) / 2;
 
             const prevPx = s.px;
-            s.px = s.moveFromX + (s.moveTargetX - s.moveFromX) * ease;
+            const jukeX = nv > 0.25 ? Math.sin(u * Math.PI * 2) * 38 * nv : 0;
+            const jukeAlt = nv > 0.25 ? Math.sin(u * Math.PI * 3) * 44 * nv : 0;
+            s.px = s.moveFromX + (s.moveTargetX - s.moveFromX) * ease + jukeX;
             const linearAlt = s.moveFromAlt + (s.moveTargetAlt - s.moveFromAlt) * ease;
             const arcAlt = s.moveArcAlt * Math.sin(u * Math.PI);
-            s.goalAlt = linearAlt + arcAlt;
+            s.goalAlt = Math.max(0, linearAlt + arcAlt + jukeAlt);
 
             const speedX = Math.abs(s.px - prevPx) / Math.max(dt, 0.001);
             const targetWalk = s.goalAlt > 20 ? Math.min(1.3, speedX / 550) : Math.min(1.6, speedX / 420);
@@ -2742,7 +4602,7 @@ export function PiggyDuelPlugin({
               s.goalAlt = s.moveTargetAlt;
               s.visitedSpots.add(s.spotIndex);
               s.bossAction = 'PATTERN_STOP';
-              s.bossTimer = s.stopDuration;
+              s.bossTimer = s.stopDuration * Math.max(0.45, 1 - nv * 0.42);
               s.walkM = 0;
 
               // Landing impact on floor arrival or heel-skid dust on fast ground stop
@@ -2759,9 +4619,34 @@ export function PiggyDuelPlugin({
               }
             }
           }
+          s.playerIdleTimer += rawDt;
         } else if (s.phase === 'TITLE_MENU') {
+          // When doing nothing on the title screen, piggy walks peacefully right and left!
+          s.bossAction = 'WALK';
+          s.goalAlt = 0;
+          const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.45, 1 - 0.5 * s.dizzyLevel) : 1;
+          const menuMinX = MIN_X + 115;
+          const menuMaxX = MAX_X - 115;
+          const menuWalkSpd = 195 * dizzyPace;
           s.bellyVel += Math.sin(now * 0.0025) * 0.0004;
-          s.walkM += (0 - s.walkM) * Math.min(1, dt * 6);
+          if (s.walkTurnPause > 0) {
+            s.walkTurnPause = Math.max(0, s.walkTurnPause - dt);
+            s.walkM += (0 - s.walkM) * Math.min(1, dt * 12);
+          } else {
+            s.px += s.dir * menuWalkSpd * dt;
+            s.walkM += (0.84 - s.walkM) * Math.min(1, dt * 8);
+            if (s.px <= menuMinX) {
+              s.px = menuMinX;
+              s.dir = 1;
+              s.walkTurnPause = 0.18;
+              s.spLean.v += 10;
+            } else if (s.px >= menuMaxX) {
+              s.px = menuMaxX;
+              s.dir = -1;
+              s.walkTurnPause = 0.18;
+              s.spLean.v -= 10;
+            }
+          }
         }
 
         // Track real horizontal velocity & acceleration for realistic banking + dual trails
@@ -2772,13 +4657,26 @@ export function PiggyDuelPlugin({
 
         // Update player's falling coins with physical ricochets, floor bounces & premium expiration
         const inBallMode = s.ballMorph > 0.35;
-        const activePiggyCenterY = FLOOR_Y + s.py + (545 + 46 * s.ballMorph - 911) * PIGGY_SCALE;
+        const activePiggyCenterY = getBallWorldCenterY();
         const activeSlotPos = getSlotHolePos();
         const slotFacingUp = !inBallMode || activeSlotPos.y <= activePiggyCenterY + 18;
         const slotHitR = inBallMode ? 38 + s.bellyLevel * 8 : 46 + s.bellyLevel * 10;
-        const bodyRx = inBallMode ? 72 + s.bellyLevel * 24 : 58 + s.bellyLevel * 28;
-        const bodyRy = inBallMode ? 72 + s.bellyLevel * 24 : 82 + s.bellyLevel * 22;
+        const ballShellR = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE;
+        const bodyRx = inBallMode ? ballShellR * 0.92 : 58 + s.bellyLevel * 28;
+        const bodyRy = inBallMode ? ballShellR * 0.92 : 82 + s.bellyLevel * 22;
         const nextProj: Projectile[] = [];
+
+        const handleMissedCoin = (missX: number, missY: number) => {
+          if (s.phase !== 'PLAYING' || s.bossAction === 'BREAKING' || s.pumpProgress <= 0) return;
+          s.pumpProgress = 0;
+          s.pumpHoldTimer = 0;
+          s.combo = 0;
+          s.bellyGoal = 0.04;
+          s.nervousPanicTimer = 0;
+          spawnDustPuff(activeSlotPos.x, activeSlotPos.y - 8, s.dir, 4, 150);
+          spawnFloater(missX, Math.min(missY - 22, FLOOR_Y - 40), 'MISS! ROW RESET (0/3)', '#DC2626', 18);
+          synthRef.current?.playArmorClank();
+        };
 
         for (const p of s.projectiles) {
           p.life -= dt;
@@ -2786,6 +4684,10 @@ export function PiggyDuelPlugin({
             p.armorHitCooldown = Math.max(0, p.armorHitCooldown - dt);
           }
           if (p.life <= 0) {
+            if (!p.missedHandled) {
+              p.missedHandled = true;
+              handleMissedCoin(p.x, p.y);
+            }
             spawnCoinExpireFx(p.x, p.y, p.vx, p.vy);
             continue;
           }
@@ -2801,12 +4703,22 @@ export function PiggyDuelPlugin({
 
           // Off-arena horizontal or ceiling vanish
           if (p.x < -80 || p.x > WORLD_W + 80 || p.y < -180) {
-            spawnCoinExpireFx(Math.max(10, Math.min(WORLD_W - 10, p.x)), Math.max(10, p.y), p.vx, p.vy);
+            const edgeX = Math.max(10, Math.min(WORLD_W - 10, p.x));
+            const edgeY = Math.max(10, p.y);
+            if (!p.missedHandled) {
+              p.missedHandled = true;
+              handleMissedCoin(edgeX, edgeY);
+            }
+            spawnCoinExpireFx(edgeX, edgeY, p.vx, p.vy);
             continue;
           }
 
           // Arena floor bounce (up to 2 elastic clinks) or premium settle-dissolve
           if (p.y + p.r * 0.7 >= FLOOR_Y && p.vy > 0) {
+            if (!p.missedHandled) {
+              p.missedHandled = true;
+              handleMissedCoin(p.x, FLOOR_Y - 12);
+            }
             const bounces = p.bounces ?? 0;
             if (bounces < 2 && Math.abs(p.vy) > 170) {
               p.y = FLOOR_Y - p.r * 0.7;
@@ -2834,10 +4746,11 @@ export function PiggyDuelPlugin({
           }
 
           if (s.bossAction !== 'BREAKING') {
-            // 1. Top-drop into Piggybank's Coin Slot Hole (+1 full pump & emerald collision gleam!)
+            // 1. Top-drop into Piggybank's Coin Slot Hole (+1 in the 3-in-a-row streak!)
             const distToSlot = Math.hypot(p.x - activeSlotPos.x, p.y - activeSlotPos.y);
-            const slotApproachOk = p.gravity < 300 ? p.vy > -160 : p.vy > 0;
-            if (slotApproachOk && slotFacingUp && distToSlot < slotHitR) {
+            const slotApproachOk = p.gravity < 300 ? p.vy > -420 : p.vy > 0;
+            const effectiveSlotR = slotHitR + (p.power ?? 0) * 10;
+            if (slotApproachOk && slotFacingUp && distToSlot < effectiveSlotR) {
               s.droppingCoins.push({
                 relX: p.x - activeSlotPos.x,
                 relY: Math.min(-10, p.y - activeSlotPos.y),
@@ -2852,12 +4765,12 @@ export function PiggyDuelPlugin({
                 maxLife: 0.36,
                 dir: s.dir,
               });
-              spawnCollisionFx(activeSlotPos.x, activeSlotPos.y, 0, -1, '#22C55E', true);
-              receiveCoinInSlot(activeSlotPos.x, activeSlotPos.y, 1.0, true);
+              spawnCollisionFx(activeSlotPos.x, activeSlotPos.y, 0, -1, (p.power ?? 0) >= 0.72 ? '#38BDF8' : '#22C55E', true);
+              receiveCoinInSlot(activeSlotPos.x, activeSlotPos.y, 1, true, p.power ?? 0);
               continue;
             }
 
-            // 2. Physical armor / bouncy ball shell ricochet!
+            // 2. Physical armor / bouncy ball shell ricochet! (does NOT count toward the 3-in-a-row fill)
             const nx = (p.x - s.px) / bodyRx;
             const ny = (p.y - activePiggyCenterY) / bodyRy;
             if ((p.armorHitCooldown ?? 0) <= 0 && nx * nx + ny * ny <= 1) {
@@ -2886,7 +4799,7 @@ export function PiggyDuelPlugin({
 
               spawnCollisionFx(p.x, p.y, hitNx, hitNy, inBallMode ? '#FBBF24' : '#F59E0B', inBallMode);
               if (inBallMode) synthRef.current?.playBallRicochet();
-              receiveCoinInSlot(p.x, p.y, inBallMode ? 0.05 : 0.1, false);
+              receiveCoinInSlot(p.x, p.y, 0, false, 0);
               nextProj.push(p);
               continue;
             }
@@ -2934,49 +4847,123 @@ export function PiggyDuelPlugin({
         s.px = Math.max(MIN_X, Math.min(MAX_X, s.px));
         s.phi += 7.8 * s.walkM * dt;
 
-        // Premium Dual Trail Emitter (Upper Brass-Gold Silk Ribbon + Lower Thruster/Wealth Ribbon)
+        // Re-check Piggy-into-Hand collision after piggy moves, then sync DOM cursor sprite cleanly
+        moveHandWithCollision(s.cx, s.cy, rawDt, false);
+        const boxSync = stageBoxRef.current;
+        const wrapSync = cursorWrapRef.current;
+        const imgSync = spriteImgRef.current;
+        if (boxSync && wrapSync) {
+          const rect = boxSync.getBoundingClientRect();
+          const pxX = ((s.cx + s.handOffsetX) / WORLD_W) * rect.width;
+          const pxY = ((s.cy + s.handHopY + s.handOffsetY) / WORLD_H) * rect.height;
+          wrapSync.style.transform = `translate3d(${pxX.toFixed(1)}px, ${pxY.toFixed(1)}px, 0)`;
+          wrapSync.style.opacity = '1';
+        }
+        const flipElSync2 = cursorFlipRef.current;
+        if (flipElSync2) {
+          flipElSync2.style.transform = `scaleX(${s.facing}) rotate(${(s.handTiltDeg * s.facing).toFixed(1)}deg) scale(${s.handScaleX.toFixed(3)}, ${s.handScaleY.toFixed(3)})`;
+          s.lastFacing = s.facing;
+        }
+        if (imgSync && (s.lastSpriteCol !== col || s.lastSpriteRow !== row)) {
+          s.lastSpriteCol = col;
+          s.lastSpriteRow = row;
+          imgSync.style.transform = `translate3d(${-col * 20}%, ${-row * 50}%, 0)`;
+        }
+
+        // Expressive Soulful Trail Emitter (Tapered Silk Ribbons + Helical Ball Wake + Kinetic Motes)
         const moveSpeedTotal = Math.hypot(s.realVx, s.vAlt * PIGGY_SCALE);
-        if (s.phase === 'PLAYING' && s.bossAction !== 'BREAKING' && (moveSpeedTotal > 85 || s.alt > 12 || s.thrS > 0.2)) {
+        const ballSpeedTotal = s.bossAction === 'BOUNCY_BALL' ? Math.hypot(s.ballVx, s.ballVy) : 0;
+        const effectiveSpeed = Math.max(moveSpeedTotal, ballSpeedTotal);
+        if (
+          s.phase === 'PLAYING' &&
+          s.bossAction !== 'BREAKING' &&
+          s.bossAction !== 'WALK' &&
+          (effectiveSpeed > 75 || s.alt > 12 || s.thrS > 0.2 || s.ballMorph > 0.2)
+        ) {
           s.trailSampleAcc += rawDt;
-          if (s.trailSampleAcc >= 0.012) {
+          const isBallSampling = s.ballMorph > 0.25;
+          const sampleInterval = isBallSampling ? 0.0085 : 0.012;
+          if (s.trailSampleAcc >= sampleInterval) {
             s.trailSampleAcc = 0;
             const curBodyY = FLOOR_Y + s.py - Math.round(195 * PIGGY_UNIT);
+            const curBallCenterY = getBallWorldCenterY();
             const backDir = s.realVx >= 0 ? -1 : 1;
             const jetWorldX = s.px + (s.dir > 0 ? -108 : 108) * PIGGY_UNIT;
             const jetWorldY = FLOOR_Y + s.py - Math.round(128 * PIGGY_UNIT);
             const x1Pos = s.px + backDir * 22 * PIGGY_UNIT;
             const y1Pos = curBodyY - Math.round(48 * PIGGY_UNIT);
+            const trailLife = isBallSampling ? 0.56 : 0.42;
             s.piggyTrail.push({
               x1: x1Pos,
               y1: y1Pos,
               x2: jetWorldX,
               y2: jetWorldY,
-              life: 0.36,
-              maxLife: 0.36,
-              speed: moveSpeedTotal,
+              cx: s.px,
+              cy: curBallCenterY,
+              life: trailLife,
+              maxLife: trailLife,
+              speed: effectiveSpeed,
               thr: s.thrS,
               belly: s.bellyLevel,
+              ballM: s.ballMorph,
+              ballAng: s.ballAngle,
+              squash: s.spBallSq.x - s.spBallWall.x,
+              nervous: s.nervousLevel,
+              vx: isBallSampling ? s.ballVx : s.realVx,
+              vy: isBallSampling ? s.ballVy : -s.vAlt * PIGGY_SCALE,
             });
-            if (s.piggyTrail.length > 36) s.piggyTrail.shift();
+            const maxTrailPts = isBallSampling ? 56 : 44;
+            while (s.piggyTrail.length > maxTrailPts) s.piggyTrail.shift();
 
-            // Whisper-light ambient motes drifting off the transparent dual trails
-            if (moveSpeedTotal > 280 && Math.random() < 0.2) {
+            // Soulful embers, supple wake motes & diamond gleams drifting off the wake
+            if (effectiveSpeed > 180 && Math.random() < (s.ballMorph > 0.3 ? 0.38 : 0.26)) {
+              const isBallTrail = s.ballMorph > 0.3;
               const upperSpawn = Math.random() < 0.45;
-              const sx = upperSpawn ? x1Pos : jetWorldX;
-              const sy = upperSpawn ? y1Pos : jetWorldY;
+              const bSpd = isBallTrail ? Math.max(1, Math.hypot(s.ballVx, s.ballVy)) : 1;
+              const trailDirX = isBallTrail ? -s.ballVx / bSpd : 0;
+              const trailDirY = isBallTrail ? -s.ballVy / bSpd : 0;
+              const rimDist = isBallTrail ? getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE * (0.45 + Math.random() * 0.45) : 0;
+              const sx = isBallTrail
+                ? s.px + trailDirX * rimDist + (Math.random() - 0.5) * 32
+                : upperSpawn
+                ? x1Pos
+                : jetWorldX;
+              const sy = isBallTrail
+                ? curBallCenterY + trailDirY * rimDist + (Math.random() - 0.5) * 32
+                : upperSpawn
+                ? y1Pos
+                : jetWorldY;
               const isRich = s.bellyLevel > 0.25 && !upperSpawn && s.thrS <= 0.25;
-              const isJet = !upperSpawn && s.thrS > 0.25;
+              const isJet = !isBallTrail && !upperSpawn && s.thrS > 0.25;
+              const isGleam = isBallTrail && Math.random() < 0.42;
+              const maxL = (isBallTrail ? 0.32 : 0.26) + Math.random() * 0.18;
               s.particles.push({
-                x: sx + (Math.random() - 0.5) * 10,
-                y: sy + (Math.random() - 0.5) * 10,
-                vx: -s.realVx * 0.12 + (Math.random() - 0.5) * 34,
-                vy: (Math.random() - 0.5) * 28 - (isJet ? 8 : 0),
-                r: isRich ? 3.2 : 2.2 + Math.random() * 1.4,
-                color: isRich ? 'rgba(34, 197, 94, 0.32)' : isJet ? 'rgba(251, 146, 60, 0.34)' : 'rgba(245, 158, 11, 0.3)',
-                life: 0.22 + Math.random() * 0.1,
-                maxLife: 0.32,
-                gravity: isRich ? 35 : -6,
-                kind: 'dot',
+                x: sx,
+                y: sy,
+                vx: -(isBallTrail ? s.ballVx : s.realVx) * 0.16 + (Math.random() - 0.5) * 58,
+                vy: -(isBallTrail ? s.ballVy * 0.12 : 0) + (Math.random() - 0.5) * 40 - (isJet ? 12 : 20),
+                r: isGleam ? 4.4 + Math.random() * 2.2 : isRich ? 3.2 : 2.6 + Math.random() * 1.5,
+                color:
+                  s.nervousLevel > 0.42 && isBallTrail
+                    ? 'rgba(248, 113, 113, 0.48)'
+                    : isGleam
+                    ? 'rgba(254, 240, 138, 0.52)'
+                    : isBallTrail
+                    ? isRich
+                      ? 'rgba(74, 222, 128, 0.36)'
+                      : 'rgba(251, 191, 36, 0.36)'
+                    : isRich
+                    ? 'rgba(34, 197, 94, 0.5)'
+                    : isJet
+                    ? 'rgba(251, 146, 60, 0.54)'
+                    : 'rgba(245, 158, 11, 0.5)',
+                life: maxL,
+                maxLife: maxL,
+                gravity: isRich ? 34 : -22,
+                kind: isGleam ? 'gleam' : 'dot',
+                rot: Math.random() * 90,
+                vrot: (Math.random() - 0.5) * 280,
+                drag: 2.8,
               });
             }
           }
@@ -2990,11 +4977,15 @@ export function PiggyDuelPlugin({
           s.bellyLevel = 0;
           s.bellyVel *= -0.4;
         }
-        const a = Math.min(1.35, s.bellyLevel + s.ballMorph * 0.42);
+        const a = Math.min(1.35, s.bellyLevel + s.ballMorph * 0.25);
         s.ripplePhase += 0.35 * dt60 * (0.4 + Math.min(1, Math.abs(s.bellyVel) * 18));
-        const wob = Math.min(0.12, Math.abs(s.bellyVel) * 2.2);
-        const st = Math.max(-0.34, Math.min(0.34, s.bellyVel * 6.5)) * (1 - s.ballMorph * 0.65);
-        applyBalloon(a, st, wob);
+        const wob = Math.min(0.14, Math.abs(s.bellyVel) * 2.4);
+        const st = Math.max(-0.34, Math.min(0.34, s.bellyVel * 6.5)) * (1 - s.ballMorph * 0.35);
+        if (!(s.bossAction === 'BREAKING' && s.breakStage >= 1)) {
+          applyBalloon(a, st, wob, s.ballMorph, s.bellyLevel);
+        } else {
+          applyBalloon(0.28, 0, 0, 0, 0.28);
+        }
         poseRig(dt, now);
       }
 
@@ -3010,28 +5001,213 @@ export function PiggyDuelPlugin({
             ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
           }
 
-          const piggyCenterY = FLOOR_Y + s.py + (545 + 46 * s.ballMorph - 911) * PIGGY_SCALE;
+          const piggyCenterY = getBallWorldCenterY();
           const slotPos = getSlotHolePos();
+
+          // Elastic ball bounce echoes (dissolving squash-and-stretch rings)
+          for (let i = s.ballAfterimages.length - 1; i >= 0; i--) {
+            const bi = s.ballAfterimages[i];
+            bi.life -= rawDt;
+            if (bi.life <= 0) {
+              s.ballAfterimages.splice(i, 1);
+              continue;
+            }
+            const t = bi.life / bi.maxLife;
+            ctx.save();
+            ctx.translate(bi.x, bi.y);
+            ctx.rotate(bi.rot);
+            ctx.scale(bi.sx, bi.sy);
+            ctx.globalAlpha = t * 0.13;
+            const echoGrad = ctx.createRadialGradient(0, 0, bi.r * 0.35, 0, 0, bi.r * 1.12);
+            echoGrad.addColorStop(0, 'rgba(254, 240, 138, 0)');
+            echoGrad.addColorStop(0.65, 'rgba(245, 158, 11, 0.25)');
+            echoGrad.addColorStop(1, 'rgba(217, 119, 6, 0)');
+            ctx.fillStyle = echoGrad;
+            ctx.beginPath();
+            ctx.arc(0, 0, bi.r * (1.02 + (1 - t) * 0.25), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(253, 224, 71, 0.38)';
+            ctx.lineWidth = 2 * t;
+            ctx.beginPath();
+            ctx.arc(0, 0, bi.r * (0.98 + (1 - t) * 0.18), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
 
           // Subtle rotating kinetic aura when Piggy is curled in Bouncy Ball state
           if (s.ballMorph > 0.05 && s.bossAction !== 'BREAKING') {
-            const ballR = 72 + s.bellyLevel * 24;
+            const ballR = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE;
             ctx.save();
             ctx.translate(s.px, piggyCenterY);
             ctx.rotate((s.ballAngle * Math.PI) / 180);
-            ctx.globalAlpha = 0.28 * s.ballMorph;
-            ctx.strokeStyle = '#D97706';
-            ctx.lineWidth = 3;
-            ctx.setLineDash([16, 12]);
+            ctx.globalAlpha = 0.16 * s.ballMorph;
+            ctx.strokeStyle = s.nervousLevel > 0.4 ? '#EF4444' : '#D97706';
+            ctx.lineWidth = 2.6;
+            ctx.setLineDash([18, 12]);
             ctx.beginPath();
-            ctx.arc(0, 0, ballR + 10, 0, Math.PI * 2);
+            ctx.arc(0, 0, ballR + 8, 0, Math.PI * 2);
             ctx.stroke();
-            ctx.setLineDash([8, 18]);
-            ctx.strokeStyle = '#FEF08A';
-            ctx.lineWidth = 1.6;
+            ctx.setLineDash([8, 16]);
+            ctx.strokeStyle = s.nervousLevel > 0.4 ? '#FCA5A5' : '#FEF08A';
+            ctx.lineWidth = 1.4;
             ctx.beginPath();
-            ctx.arc(0, 0, ballR + 16, 0, Math.PI * 2);
+            ctx.arc(0, 0, ballR + 15, 0, Math.PI * 2);
             ctx.stroke();
+            ctx.restore();
+          }
+
+          // Pulsing Crimson Overpressure / Nervous Halo when agitated
+          if (s.nervousLevel > 0.14 && s.bossAction !== 'BREAKING') {
+            const nv = s.nervousLevel;
+            const pulse = 0.5 + 0.5 * Math.sin(now * (0.016 + 0.014 * nv));
+            const haloR = (s.ballMorph > 0.3 ? getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE : 102 + s.bellyLevel * 28) + 12 + pulse * 10;
+            ctx.save();
+            ctx.translate(s.px + (s.bossAction === 'PATTERN_STOP' ? s.nervousJitterX : 0), piggyCenterY);
+            ctx.globalAlpha = (0.12 + 0.16 * pulse) * nv;
+            ctx.strokeStyle = '#EF4444';
+            ctx.lineWidth = 2.2 + nv * 1.4;
+            ctx.setLineDash([10, 12]);
+            ctx.lineDashOffset = -(now * 0.055);
+            ctx.beginPath();
+            ctx.arc(0, 0, haloR, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Dizzy Effect: 3D Orbiting Stars, Brass Spirals & Temple Squiggles upon Hand Collision
+          if (s.dizzyLevel > 0.03 && s.bossAction !== 'BREAKING') {
+            const dz = s.dizzyLevel;
+            const dizzyX = s.px + (s.bossAction === 'PATTERN_STOP' ? s.nervousJitterX : 0);
+            const normalHeadTopY = FLOOR_Y + s.py - Math.round(310 * PIGGY_UNIT);
+            const ballTopY = piggyCenterY - getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE - 18;
+            const dizzyY = normalHeadTopY * (1 - s.ballMorph) + ballTopY * s.ballMorph;
+
+            ctx.save();
+            ctx.translate(dizzyX, dizzyY);
+            ctx.rotate(Math.sin(s.dizzyPhase * 0.55) * 0.12);
+
+            // Tilted orbital track ring
+            ctx.globalAlpha = 0.42 * dz;
+            ctx.strokeStyle = '#F59E0B';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([7, 7]);
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 48, 14, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Depth-sorted orbiting stars & clockwork spirals
+            const orbitItems: { ang: number; depth: number; idx: number }[] = [];
+            for (let oi = 0; oi < 5; oi++) {
+              const ang = s.dizzyPhase + (oi * Math.PI * 2) / 5;
+              orbitItems.push({ ang, depth: Math.sin(ang), idx: oi });
+            }
+            orbitItems.sort((a, b) => a.depth - b.depth);
+
+            for (const item of orbitItems) {
+              const ox = Math.cos(item.ang) * 48;
+              const oy = Math.sin(item.ang) * 14;
+              const depthScale = 0.72 + 0.36 * ((item.depth + 1) * 0.5);
+              const itemAlpha = Math.min(1, dz * (0.62 + 0.38 * ((item.depth + 1) * 0.5)));
+
+              ctx.save();
+              ctx.translate(ox, oy);
+              ctx.scale(depthScale, depthScale);
+              ctx.globalAlpha = itemAlpha;
+
+              if (item.idx % 2 === 0) {
+                // Crisp 5-point dizzy star
+                ctx.rotate(s.dizzyPhase * 1.4 + item.idx);
+                ctx.fillStyle = item.idx === 0 ? '#FEF08A' : '#FBBF24';
+                ctx.strokeStyle = '#78350F';
+                ctx.lineWidth = 1.6;
+                ctx.beginPath();
+                for (let pt = 0; pt < 10; pt++) {
+                  const r = pt % 2 === 0 ? 10.5 : 4.6;
+                  const pa = (pt * Math.PI) / 5 - Math.PI / 2;
+                  if (pt === 0) ctx.moveTo(Math.cos(pa) * r, Math.sin(pa) * r);
+                  else ctx.lineTo(Math.cos(pa) * r, Math.sin(pa) * r);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+              } else {
+                // Spinning brass dizzy spiral
+                ctx.rotate(-s.dizzyPhase * 1.8 + item.idx);
+                ctx.strokeStyle = '#EA580C';
+                ctx.lineWidth = 2.2;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                for (let st = 0; st <= 18; st++) {
+                  const frac = st / 18;
+                  const sr = 1.5 + frac * 7.2;
+                  const sa = frac * Math.PI * 3.1;
+                  const sx = Math.cos(sa) * sr;
+                  const sy = Math.sin(sa) * sr;
+                  if (st === 0) ctx.moveTo(sx, sy);
+                  else ctx.lineTo(sx, sy);
+                }
+                ctx.stroke();
+                ctx.fillStyle = '#FEF08A';
+                ctx.beginPath();
+                ctx.arc(0, 0, 2, 0, Math.PI * 2);
+                ctx.fill();
+              }
+              ctx.restore();
+            }
+
+            // Comical pulsing dizzy temple squiggles on left & right of head
+            for (const side of [-1, 1]) {
+              ctx.save();
+              ctx.translate(side * 58, 34 + Math.sin(s.dizzyPhase * 1.5 + side) * 4);
+              ctx.globalAlpha = 0.72 * dz;
+              ctx.strokeStyle = '#D97706';
+              ctx.lineWidth = 2.2;
+              ctx.lineCap = 'round';
+              ctx.beginPath();
+              ctx.moveTo(side * -5, -8);
+              ctx.quadraticCurveTo(side * 6, -3, side * -3, 2);
+              ctx.quadraticCurveTo(side * -9, 7, side * 4, 11);
+              ctx.stroke();
+              ctx.restore();
+            }
+
+            ctx.restore();
+          }
+
+          // Floating 3-Coin-Row Streak Pips & Keep-Pumped Gauge above Piggy
+          if (s.phase === 'PLAYING' && s.bossAction !== 'BREAKING') {
+            const pipY = FLOOR_Y + s.py - Math.round(355 * PIGGY_UNIT) - Math.round(s.dizzyLevel * 22);
+            const pipX = s.px + (s.bossAction === 'PATTERN_STOP' ? s.nervousJitterX : 0);
+            ctx.save();
+            ctx.translate(pipX, pipY);
+            for (let pi = 0; pi < s.pumpTarget; pi++) {
+              const ox = (pi - (s.pumpTarget - 1) / 2) * 22;
+              const filled = pi < s.pumpProgress;
+              ctx.beginPath();
+              ctx.arc(ox, 0, filled ? 7 : 5.5, 0, Math.PI * 2);
+              if (filled) {
+                ctx.fillStyle = s.pumpProgress >= 2 ? '#EF4444' : '#22C55E';
+                ctx.fill();
+                ctx.strokeStyle = '#FFFDF9';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              } else {
+                ctx.fillStyle = 'rgba(255, 253, 249, 0.72)';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(120, 53, 15, 0.45)';
+                ctx.lineWidth = 1.8;
+                ctx.stroke();
+              }
+            }
+            if (s.pumpProgress > 0 && s.pumpHoldMax > 0) {
+              const holdFrac = Math.max(0, Math.min(1, s.pumpHoldTimer / s.pumpHoldMax));
+              const barW = 54;
+              ctx.fillStyle = 'rgba(35, 26, 16, 0.2)';
+              ctx.fillRect(-barW / 2, 12, barW, 4);
+              ctx.fillStyle = holdFrac < 0.35 ? '#EF4444' : s.pumpProgress >= 2 ? '#F59E0B' : '#22C55E';
+              ctx.fillRect(-barW / 2, 12, barW * holdFrac, 4);
+            }
             ctx.restore();
           }
 
@@ -3098,189 +5274,354 @@ export function PiggyDuelPlugin({
             ctx.restore();
           }
 
-          // Playful Sweeping Parabolic Sling-Laser Trajectory & Sync Lock Cue
+          // Tap-Activated Growing Laser Beam (starts the moment you tap & gets bigger as you maintain it)
+          const laserActive = s.handHoldActive || s.laserFadeTimer > 0;
           if ((s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') && s.bossAction !== 'BREAKING') {
-            const launch = getSlingLaunchState();
-            // Always orient hand left/right with the live laser launch direction (reversed sprite orientation)
-            if (Math.abs(launch.vx) > 16) {
-              s.facing = launch.vx >= 0 ? -1 : 1;
-            } else if (Math.abs(launch.slot.x - s.cx) > 12) {
-              s.facing = launch.slot.x >= s.cx ? -1 : 1;
-            }
-            const flipElSync = cursorFlipRef.current;
-            if (flipElSync && s.lastFacing !== s.facing) {
-              s.lastFacing = s.facing;
-              flipElSync.style.transform = `scaleX(${s.facing})`;
-            }
-
-            const simPts: { x: number; y: number }[] = [{ x: launch.spawnX, y: launch.spawnY }];
-            let lx = launch.spawnX;
-            let ly = launch.spawnY;
-            const lvx = launch.vx;
-            let lvy = launch.vy;
-            const isStraightLaser = !launch.profile.curved;
-            const stepDt = isStraightLaser ? 0.016 : 0.022;
-            const maxSteps = isStraightLaser ? 56 : 44;
-            const inBallMode = s.ballMorph > 0.35;
-            const slotFacingUp = !inBallMode || slotPos.y <= piggyCenterY + 18;
-            const slotR = inBallMode ? 38 + s.bellyLevel * 8 : 46 + s.bellyLevel * 10;
-            const bodyRx = inBallMode ? 72 + s.bellyLevel * 24 : 58 + s.bellyLevel * 28;
-            const bodyRy = inBallMode ? 72 + s.bellyLevel * 24 : 82 + s.bellyLevel * 22;
-
-            let hitKind: 'none' | 'slot' | 'body' | 'floor' = 'none';
-            let impactX = lx;
-            let impactY = ly;
-
-            for (let step = 0; step < maxSteps; step++) {
-              lvy += launch.gravity * stepDt;
-              lx += lvx * stepDt;
-              ly += lvy * stepDt;
-              simPts.push({ x: lx, y: ly });
-
-              const slotPreviewOk = isStraightLaser ? lvy > -160 : lvy > 0;
-              if (slotPreviewOk && slotFacingUp && Math.hypot(lx - slotPos.x, ly - slotPos.y) < slotR) {
-                hitKind = 'slot';
-                impactX = slotPos.x;
-                impactY = slotPos.y;
-                break;
+            if (!laserActive) {
+              s.slingLocked = false;
+              if (Math.abs(slotPos.x - s.cx) > 12) {
+                s.facing = slotPos.x >= s.cx ? -1 : 1;
               }
-              const bnx = (lx - s.px) / bodyRx;
-              const bny = (ly - piggyCenterY) / bodyRy;
-              if (bnx * bnx + bny * bny <= 1) {
-                hitKind = 'body';
-                impactX = lx;
-                impactY = ly;
-                break;
+              const flipElIdle = cursorFlipRef.current;
+              if (flipElIdle && s.lastFacing !== s.facing) {
+                s.lastFacing = s.facing;
+                flipElIdle.style.transform = `scaleX(${s.facing}) rotate(${(s.handTiltDeg * s.facing).toFixed(1)}deg) scale(${s.handScaleX.toFixed(3)}, ${s.handScaleY.toFixed(3)})`;
               }
-              if (ly >= FLOOR_Y) {
-                hitKind = 'floor';
-                impactX = lx;
-                impactY = FLOOR_Y;
-                break;
+            } else {
+              const launch = getSlingLaunchState();
+              // Always orient hand left/right with the live laser launch direction (reversed sprite orientation)
+              if (Math.abs(launch.vx) > 16) {
+                s.facing = launch.vx >= 0 ? -1 : 1;
+              } else if (Math.abs(launch.slot.x - s.cx) > 12) {
+                s.facing = launch.slot.x >= s.cx ? -1 : 1;
               }
-              if (lx < 0 || lx > WORLD_W || ly < -140) break;
-            }
+              const flipElSync = cursorFlipRef.current;
+              if (flipElSync && s.lastFacing !== s.facing) {
+                s.lastFacing = s.facing;
+                flipElSync.style.transform = `scaleX(${s.facing}) rotate(${(s.handTiltDeg * s.facing).toFixed(1)}deg) scale(${s.handScaleX.toFixed(3)}, ${s.handScaleY.toFixed(3)})`;
+              }
 
-            s.slingLocked = hitKind === 'slot';
+              const fadeMax = s.laserHoldSnapshot > 0.22 ? 0.24 : 0.16;
+              const fadeAlpha = s.handHoldActive ? 1 : Math.max(0, Math.min(1, s.laserFadeTimer / fadeMax));
+              const growRaw = Math.max(0, Math.min(1, s.handHoldActive ? s.laserGrow : s.laserHoldSnapshot));
+              const grow = growRaw * (0.45 + 0.55 * (growRaw * (2 - growRaw)));
 
-            ctx.save();
-            // Soft base slot ring on piggy
-            ctx.strokeStyle =
-              hitKind === 'slot'
-                ? 'rgba(34, 197, 94, 0.95)'
-                : hitKind === 'body'
-                ? 'rgba(245, 158, 11, 0.72)'
-                : isStraightLaser
-                ? 'rgba(2, 132, 199, 0.36)'
-                : 'rgba(180, 83, 9, 0.25)';
-            ctx.lineWidth = hitKind === 'slot' ? 3.5 : 1.8;
-            ctx.setLineDash(hitKind === 'slot' ? [] : [6, 6]);
-            ctx.beginPath();
-            ctx.arc(slotPos.x, slotPos.y, hitKind === 'slot' ? 34 : 24, 0, Math.PI * 2);
-            ctx.stroke();
+              const simPts: { x: number; y: number }[] = [{ x: launch.spawnX, y: launch.spawnY }];
+              let lx = launch.spawnX;
+              let ly = launch.spawnY;
+              const lvx = launch.vx;
+              let lvy = launch.vy;
+              const isStraightLaser = !launch.profile.curved;
+              const stepDt = isStraightLaser ? 0.016 : 0.022;
+              const maxSteps = isStraightLaser ? 56 : 44;
+              const inBallMode = s.ballMorph > 0.35;
+              const slotFacingUp = !inBallMode || slotPos.y <= piggyCenterY + 18;
+              const slotR = inBallMode ? 38 + s.bellyLevel * 8 : 46 + s.bellyLevel * 10;
+              const bodyRx = inBallMode ? 72 + s.bellyLevel * 24 : 58 + s.bellyLevel * 28;
+              const bodyRy = inBallMode ? 72 + s.bellyLevel * 24 : 82 + s.bellyLevel * 22;
 
-            // Varied Targeting Laser Beam (Curved Sling Parabolas OR Razor-Straight Rail Beams)
-            if (simPts.length >= 2) {
-              ctx.setLineDash([]);
-              ctx.lineCap = 'round';
-              ctx.lineJoin = 'round';
+              let hitKind: 'none' | 'slot' | 'body' | 'floor' = 'none';
+              let impactX = lx;
+              let impactY = ly;
 
-              const traceLaser = () => {
-                ctx.beginPath();
-                ctx.moveTo(simPts[0].x, simPts[0].y);
-                const lastPt = simPts[simPts.length - 1];
-                if (isStraightLaser) {
-                  ctx.lineTo(lastPt.x, lastPt.y);
-                } else {
-                  for (let k = 1; k < simPts.length - 1; k++) {
-                    const mx = (simPts[k].x + simPts[k + 1].x) * 0.5;
-                    const my = (simPts[k].y + simPts[k + 1].y) * 0.5;
-                    ctx.quadraticCurveTo(simPts[k].x, simPts[k].y, mx, my);
-                  }
-                  ctx.lineTo(lastPt.x, lastPt.y);
+              for (let step = 0; step < maxSteps; step++) {
+                lvy += launch.gravity * stepDt;
+                lx += lvx * stepDt;
+                ly += lvy * stepDt;
+                simPts.push({ x: lx, y: ly });
+
+                const slotPreviewOk = isStraightLaser ? lvy > -420 : lvy > 0;
+                const previewSlotR = slotR + launch.charge * 10;
+                const hitLiveSlot = Math.hypot(lx - slotPos.x, ly - slotPos.y) < previewSlotR;
+                const hitPredSlot =
+                  Math.hypot(launch.interceptX - slotPos.x, launch.interceptY - slotPos.y) > 8 &&
+                  Math.hypot(lx - launch.interceptX, ly - launch.interceptY) < previewSlotR;
+                if (slotPreviewOk && slotFacingUp && (hitLiveSlot || hitPredSlot)) {
+                  hitKind = 'slot';
+                  impactX = hitPredSlot && !hitLiveSlot ? launch.interceptX : slotPos.x;
+                  impactY = hitPredSlot && !hitLiveSlot ? launch.interceptY : slotPos.y;
+                  break;
                 }
-              };
+                const bnx = (lx - s.px) / bodyRx;
+                const bny = (ly - piggyCenterY) / bodyRy;
+                if (bnx * bnx + bny * bny <= 1) {
+                  hitKind = 'body';
+                  impactX = lx;
+                  impactY = ly;
+                  break;
+                }
+                if (ly >= FLOOR_Y) {
+                  hitKind = 'floor';
+                  impactX = lx;
+                  impactY = FLOOR_Y;
+                  break;
+                }
+                if (lx < 0 || lx > WORLD_W || ly < -140) break;
+              }
 
-              const laserColor =
-                hitKind === 'slot' ? '#22C55E' : hitKind === 'body' ? '#F59E0B' : launch.profile.beamColor;
-              const laserCore =
-                hitKind === 'slot' ? '#FEF08A' : hitKind === 'body' ? '#FEF3C7' : launch.profile.coreColor;
+              s.slingLocked = s.handHoldActive && hitKind === 'slot';
 
-              // Outer laser bloom
-              traceLaser();
-              ctx.globalAlpha = hitKind === 'slot' ? 0.34 : isStraightLaser ? 0.24 : 0.2;
-              ctx.strokeStyle = laserColor;
-              ctx.lineWidth = hitKind === 'slot' ? 12 : isStraightLaser ? 8 : 9;
+              // Slice trajectory progressively so beam starts short at tap & shoots out to full reach as maintained
+              const cumDists: number[] = [0];
+              for (let i = 1; i < simPts.length; i++) {
+                cumDists.push(
+                  cumDists[i - 1] + Math.hypot(simPts[i].x - simPts[i - 1].x, simPts[i].y - simPts[i - 1].y)
+                );
+              }
+              const totalDist = cumDists[cumDists.length - 1];
+              const reachEase = Math.min(1, growRaw / 0.34);
+              const reachFrac = 0.28 + 0.72 * (1 - Math.pow(1 - reachEase, 2));
+              const targetLen =
+                totalDist <= 140
+                  ? totalDist
+                  : Math.min(totalDist, Math.max(140, totalDist * reachFrac));
+              const fullReach = targetLen >= totalDist - 6;
+
+              const visiblePts: { x: number; y: number }[] = [simPts[0]];
+              if (simPts.length >= 2) {
+                for (let i = 1; i < simPts.length; i++) {
+                  if (cumDists[i] <= targetLen) {
+                    visiblePts.push(simPts[i]);
+                  } else {
+                    const segLen = Math.max(0.001, cumDists[i] - cumDists[i - 1]);
+                    const segT = Math.max(0, Math.min(1, (targetLen - cumDists[i - 1]) / segLen));
+                    visiblePts.push({
+                      x: simPts[i - 1].x + (simPts[i].x - simPts[i - 1].x) * segT,
+                      y: simPts[i - 1].y + (simPts[i].y - simPts[i - 1].y) * segT,
+                    });
+                    break;
+                  }
+                }
+              }
+
+              ctx.save();
+              // Predictive moving-slot ghost marker when leading a moving/bouncing piggy
+              const leadOffset = Math.hypot(launch.interceptX - slotPos.x, launch.interceptY - slotPos.y);
+              if (leadOffset > 10) {
+                ctx.globalAlpha = fadeAlpha * (0.45 + grow * 0.45);
+                ctx.strokeStyle = hitKind === 'slot' ? 'rgba(34, 197, 94, 0.8)' : 'rgba(14, 165, 233, 0.5)';
+                ctx.lineWidth = 1.6 + grow * 0.8;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(slotPos.x, slotPos.y);
+                ctx.lineTo(launch.interceptX, launch.interceptY);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(launch.interceptX, launch.interceptY, 14 + grow * 6, 0, Math.PI * 2);
+                ctx.stroke();
+              }
+
+              // Soft base slot ring on piggy
+              ctx.globalAlpha = fadeAlpha;
+              ctx.strokeStyle =
+                hitKind === 'slot'
+                  ? 'rgba(34, 197, 94, 0.95)'
+                  : hitKind === 'body'
+                  ? 'rgba(245, 158, 11, 0.72)'
+                  : isStraightLaser
+                  ? 'rgba(2, 132, 199, 0.38)'
+                  : 'rgba(180, 83, 9, 0.28)';
+              ctx.lineWidth = (hitKind === 'slot' ? 3.2 : 1.8) + grow * 1.4;
+              ctx.setLineDash(hitKind === 'slot' ? [] : [6, 6]);
+              ctx.beginPath();
+              ctx.arc(slotPos.x, slotPos.y, (hitKind === 'slot' ? 28 : 22) + grow * 10, 0, Math.PI * 2);
               ctx.stroke();
 
-              // Crisp beam body (continuous crisp beam for straight lasers, animated dashed arc for sling curves)
-              traceLaser();
-              ctx.globalAlpha = hitKind === 'slot' ? 0.94 : isStraightLaser ? 0.84 : 0.74;
-              ctx.strokeStyle = laserColor;
-              ctx.lineWidth = hitKind === 'slot' ? 4.2 : isStraightLaser ? 2.8 : 3.2;
-              if (isStraightLaser) {
+              // Growing Targeting Laser Beam
+              if (visiblePts.length >= 2) {
                 ctx.setLineDash([]);
-              } else {
-                ctx.setLineDash([12, 9]);
-                ctx.lineDashOffset = -(now * (0.065 + launch.profile.sweepRate * 0.012));
-              }
-              ctx.stroke();
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
 
-              // Luminous inner filament
-              traceLaser();
-              ctx.globalAlpha = hitKind === 'slot' ? 0.92 : 0.72;
-              ctx.strokeStyle = laserCore;
-              ctx.lineWidth = isStraightLaser ? 1.3 : 1.6;
-              if (isStraightLaser) {
-                ctx.setLineDash([16, 12]);
-                ctx.lineDashOffset = -(now * 0.14);
-              } else {
-                ctx.setLineDash([6, 15]);
-                ctx.lineDashOffset = -(now * (0.065 + launch.profile.sweepRate * 0.012));
-              }
-              ctx.stroke();
-              ctx.setLineDash([]);
+                const traceLaser = () => {
+                  ctx.beginPath();
+                  ctx.moveTo(visiblePts[0].x, visiblePts[0].y);
+                  const lastPt = visiblePts[visiblePts.length - 1];
+                  if (isStraightLaser) {
+                    ctx.lineTo(lastPt.x, lastPt.y);
+                  } else {
+                    for (let k = 1; k < visiblePts.length - 1; k++) {
+                      const mx = (visiblePts[k].x + visiblePts[k + 1].x) * 0.5;
+                      const my = (visiblePts[k].y + visiblePts[k + 1].y) * 0.5;
+                      ctx.quadraticCurveTo(visiblePts[k].x, visiblePts[k].y, mx, my);
+                    }
+                    ctx.lineTo(lastPt.x, lastPt.y);
+                  }
+                };
 
-              // Animated traveling laser pulses/beads along path
-              const beadSpeed = isStraightLaser ? 0.0036 : 0.0022;
-              const beadPhase = (now * beadSpeed) % 1;
-              for (let bi = 0; bi < 4; bi++) {
-                const frac = (beadPhase + bi * 0.25) % 1;
-                const idx = Math.min(simPts.length - 1, Math.floor(frac * (simPts.length - 1)));
-                const bp = simPts[idx];
-                ctx.globalAlpha = Math.sin(frac * Math.PI) * 0.95;
+                const chg = launch.charge;
+                const elev = launch.elev;
+                const dynEnergy = Math.max(grow, chg, elev * 0.75);
+                const chargedBeamColor = elev >= 0.72 ? '#EF4444' : elev >= 0.32 ? '#0EA5E9' : launch.profile.beamColor;
+                const chargedCoreColor = elev >= 0.72 ? '#FEF08A' : elev >= 0.32 ? '#E0F2FE' : launch.profile.coreColor;
+                const laserColor =
+                  hitKind === 'slot' ? '#22C55E' : hitKind === 'body' ? '#F59E0B' : chargedBeamColor;
+                const laserCore =
+                  hitKind === 'slot' ? '#FEF08A' : hitKind === 'body' ? '#FEF3C7' : chargedCoreColor;
+
+                // Hand Emitter Ignition & Growing Plasma Orb
+                const emitterR = (4.5 + grow * 11.5 + s.laserIgniteFlash * 5) * (hitKind === 'slot' ? 1.15 : 1);
+                ctx.globalAlpha = (0.34 + grow * 0.36) * fadeAlpha;
+                ctx.fillStyle = laserColor;
+                ctx.beginPath();
+                ctx.arc(launch.spawnX, launch.spawnY, emitterR * 1.45, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = (0.78 + grow * 0.22) * fadeAlpha;
                 ctx.fillStyle = laserCore;
                 ctx.beginPath();
-                ctx.arc(bp.x, bp.y, hitKind === 'slot' ? 4.6 : isStraightLaser ? 3.2 : 3.5, 0, Math.PI * 2);
+                ctx.arc(launch.spawnX, launch.spawnY, emitterR * 0.62, 0, Math.PI * 2);
                 ctx.fill();
-              }
 
-              // Predicted impact dot / Sync-Lock Reticle
-              if (hitKind === 'slot') {
-                const pulse = 1 + 0.12 * Math.sin(now * 0.02);
-                ctx.globalAlpha = 0.95;
-                ctx.strokeStyle = '#15803D';
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.arc(impactX, impactY, 22 * pulse, 0, Math.PI * 2);
+                if (grow > 0.2 && s.handHoldActive) {
+                  ctx.save();
+                  ctx.translate(launch.spawnX, launch.spawnY);
+                  ctx.rotate(now * 0.006);
+                  ctx.globalAlpha = Math.min(0.85, (grow - 0.15) * 0.95) * fadeAlpha;
+                  ctx.strokeStyle = laserColor;
+                  ctx.lineWidth = 1.6 + grow * 1.4;
+                  ctx.setLineDash([5, 6]);
+                  ctx.beginPath();
+                  ctx.arc(0, 0, emitterR * 1.75, 0, Math.PI * 2);
+                  ctx.stroke();
+                  ctx.restore();
+                }
+
+                // Outer laser bloom (starts tight on tap, swells dramatically as hold is maintained)
+                traceLaser();
+                ctx.globalAlpha = ((hitKind === 'slot' ? 0.26 : 0.18) + grow * 0.26) * fadeAlpha;
+                ctx.strokeStyle = laserColor;
+                ctx.lineWidth = (isStraightLaser ? 4.5 : 5.2) + grow * 19.5 + (hitKind === 'slot' ? 3.5 : 0);
                 ctx.stroke();
 
-                ctx.fillStyle = '#15803D';
-                ctx.font = '800 13px "JetBrains Mono", monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText('SYNC!', impactX, impactY - 58);
-              } else if (hitKind !== 'none') {
-                ctx.globalAlpha = 0.78;
-                ctx.fillStyle = hitKind === 'body' ? '#F59E0B' : laserColor;
-                ctx.beginPath();
-                ctx.arc(impactX, impactY, isStraightLaser ? 5 : 6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.strokeStyle = '#FFFBEB';
-                ctx.lineWidth = 1.5;
+                // Crisp beam body (starts razor-thin at tap, thickens into a heavy beam as maintained)
+                traceLaser();
+                ctx.globalAlpha = (0.78 + grow * 0.22) * fadeAlpha;
+                ctx.strokeStyle = laserColor;
+                ctx.lineWidth = (isStraightLaser ? 1.8 : 2.1) + grow * 7.8 + (hitKind === 'slot' ? 1.5 : 0);
+                if (isStraightLaser || elev >= 0.45 || grow >= 0.32) {
+                  ctx.setLineDash([]);
+                } else {
+                  ctx.setLineDash([12, 8]);
+                  ctx.lineDashOffset = -(now * (0.065 + launch.profile.sweepRate * 0.012 + dynEnergy * 0.08));
+                }
                 ctx.stroke();
+
+                // Luminous inner filament
+                traceLaser();
+                ctx.globalAlpha = (0.72 + grow * 0.28) * fadeAlpha;
+                ctx.strokeStyle = laserCore;
+                ctx.lineWidth = 0.9 + grow * 3.4;
+                if (isStraightLaser || elev >= 0.45 || grow >= 0.32) {
+                  ctx.setLineDash([16, 10]);
+                  ctx.lineDashOffset = -(now * (0.14 + dynEnergy * 0.18));
+                } else {
+                  ctx.setLineDash([6, 14]);
+                  ctx.lineDashOffset = -(now * (0.065 + launch.profile.sweepRate * 0.012));
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Animated traveling laser pulses/beads scaling up with hold
+                const beadSpeed = (isStraightLaser ? 0.0036 : 0.0022) * (1 + dynEnergy * 1.25);
+                const beadPhase = (now * beadSpeed) % 1;
+                for (let bi = 0; bi < 4; bi++) {
+                  const frac = (beadPhase + bi * 0.25) % 1;
+                  const idx = Math.min(visiblePts.length - 1, Math.floor(frac * (visiblePts.length - 1)));
+                  const bp = visiblePts[idx];
+                  ctx.globalAlpha = Math.sin(frac * Math.PI) * 0.95 * fadeAlpha;
+                  ctx.fillStyle = laserCore;
+                  ctx.beginPath();
+                  ctx.arc(bp.x, bp.y, 2.0 + grow * 5.4 + (hitKind === 'slot' ? 1.2 : 0), 0, Math.PI * 2);
+                  ctx.fill();
+                }
+
+                // Subtle Low-to-Top Elevation Track Guide along the aim column while holding
+                if (s.handHoldActive) {
+                  ctx.save();
+                  ctx.globalAlpha = 0.28 + grow * 0.18;
+                  ctx.strokeStyle = laserColor;
+                  ctx.lineWidth = 1.4 + grow * 0.8;
+                  ctx.setLineDash([4, 6]);
+                  ctx.beginPath();
+                  ctx.moveTo(launch.targetX, FLOOR_Y - 14);
+                  ctx.lineTo(launch.targetX, 76);
+                  ctx.stroke();
+                  ctx.setLineDash([]);
+
+                  ctx.globalAlpha = 0.85;
+                  ctx.fillStyle = laserCore;
+                  ctx.strokeStyle = laserColor;
+                  ctx.lineWidth = 1.8 + grow * 0.8;
+                  ctx.beginPath();
+                  ctx.arc(launch.targetX, launch.targetY, 4.2 + grow * 3.0, 0, Math.PI * 2);
+                  ctx.fill();
+                  ctx.stroke();
+                  ctx.restore();
+                }
+
+                // Tip Flare & Impact / Sync Reticle (grows as beam reaches & charges)
+                const tipPt = visiblePts[visiblePts.length - 1];
+                const retX = fullReach && hitKind !== 'none' ? impactX : tipPt.x;
+                const retY = fullReach && hitKind !== 'none' ? impactY : tipPt.y;
+
+                if (fullReach && hitKind === 'slot') {
+                  const pulse = 1 + 0.12 * Math.sin(now * 0.02);
+                  ctx.globalAlpha = 0.95 * fadeAlpha;
+                  ctx.strokeStyle = '#15803D';
+                  ctx.lineWidth = 2.6 + grow * 1.6;
+                  ctx.beginPath();
+                  ctx.arc(retX, retY, (18 + grow * 10) * pulse, 0, Math.PI * 2);
+                  ctx.stroke();
+
+                  ctx.fillStyle = '#15803D';
+                  ctx.font = '800 13px "JetBrains Mono", monospace';
+                  ctx.textAlign = 'center';
+                  ctx.fillText(chg >= 0.72 ? 'POWER SYNC!' : 'SYNC!', retX, retY - (48 + grow * 14));
+                } else {
+                  ctx.globalAlpha = 0.85 * fadeAlpha;
+                  ctx.fillStyle = fullReach && hitKind === 'body' ? '#F59E0B' : laserColor;
+                  ctx.beginPath();
+                  ctx.arc(retX, retY, 3.6 + grow * 8.2, 0, Math.PI * 2);
+                  ctx.fill();
+                  ctx.strokeStyle = '#FFFBEB';
+                  ctx.lineWidth = 1.4 + grow * 0.8;
+                  ctx.stroke();
+
+                  if (grow > 0.06) {
+                    const lockR = 14 + grow * 22;
+                    ctx.save();
+                    ctx.translate(retX, retY);
+                    ctx.rotate(now * 0.004 * (1 + dynEnergy * 2));
+                    ctx.globalAlpha = (0.42 + grow * 0.45) * fadeAlpha;
+                    ctx.strokeStyle = laserColor;
+                    ctx.lineWidth = 1.6 + grow * 1.6;
+                    ctx.setLineDash([8, 6]);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, lockR, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.restore();
+                  }
+                }
               }
+              ctx.restore();
             }
-            ctx.restore();
+          }
+
+          // Dynamic Floor Contact Shadows for Heavy Disassembled Hull Parts
+          if (s.bossAction === 'BREAKING') {
+            const pFade = s.breakTimer < 0.32 ? Math.max(0, s.breakTimer / 0.32) : 1;
+            for (const dp of s.disassemblyParts) {
+              if (!dp.detached) continue;
+              const hAbove = Math.max(0, FLOOR_Y - dp.r - dp.wy);
+              const hf = Math.max(0.22, 1 - hAbove / 540);
+              ctx.save();
+              ctx.globalAlpha = pFade * (0.14 + 0.16 * Math.min(1.6, dp.mass * 0.65)) * hf;
+              ctx.fillStyle = '#231A10';
+              ctx.beginPath();
+              ctx.ellipse(dp.wx, FLOOR_Y + 4, dp.r * (0.95 + 0.35 * hf), Math.max(3, dp.r * 0.22 * hf), 0, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+            }
           }
 
           // Landing Floor Shockwave Rings
@@ -3360,77 +5701,133 @@ export function PiggyDuelPlugin({
             ctx.restore();
           }
 
-          // Smooth Rounded Solid Dual Trails (Upper Brass-Gold Stream + Lower Thruster/Wealth Stream)
+          // Tapered Soulful Ribbons (Calligraphic Motion Streams + Supple Helical Bouncy Ball Wake)
+          const trailFadeScale = s.bossAction === 'WALK' ? 3.2 : 1;
           for (let i = s.piggyTrail.length - 1; i >= 0; i--) {
-            s.piggyTrail[i].life -= rawDt;
-            if (s.piggyTrail[i].life <= 0) {
+            const pt = s.piggyTrail[i];
+            pt.life -= rawDt * trailFadeScale;
+            if (pt.life <= 0) {
               s.piggyTrail.splice(i, 1);
+              continue;
+            }
+            // Gentle supple slipstream drift on older ball wake samples
+            if (pt.ballM > 0.25) {
+              const ageFrac = 1 - pt.life / pt.maxLife;
+              const driftAmt = ageFrac * rawDt * 26;
+              if (pt.vx !== undefined && pt.vy !== undefined) {
+                const spd = Math.hypot(pt.vx, pt.vy) || 1;
+                pt.cx -= (pt.vx / spd) * driftAmt * 0.45;
+                pt.cy -= (pt.vy / spd) * driftAmt * 0.45 + rawDt * 18 * ageFrac;
+              } else {
+                pt.cy -= rawDt * 16 * ageFrac;
+              }
             }
           }
           if (s.piggyTrail.length >= 2) {
-            const drawSolidTrail = (
+            const drawSoulRibbon = (
               pts: { x: number; y: number; fade: number }[],
-              lineW: number,
+              baseWidth: number,
               haloColor: string,
               tailColor: string,
               midColor: string,
               headColor: string,
-              sheenColor: string
+              coreColor: string,
+              alphaBoost = 1,
+              pulsePhase = 0
             ) => {
               if (pts.length < 2) return;
+              const n = pts.length;
               const first = pts[0];
-              const last = pts[pts.length - 1];
-              const headFade = Math.max(0.15, last.fade);
+              const last = pts[n - 1];
+              const headFade = Math.max(0.15, last.fade) * alphaBoost;
 
-              const traceSmoothSpline = () => {
+              // Compute smooth unit normals along the path for true tapered supple ribbon polygon
+              const leftPts: { x: number; y: number }[] = [];
+              const rightPts: { x: number; y: number }[] = [];
+              const coreLeft: { x: number; y: number }[] = [];
+              const coreRight: { x: number; y: number }[] = [];
+              const auraLeft: { x: number; y: number }[] = [];
+              const auraRight: { x: number; y: number }[] = [];
+
+              for (let k = 0; k < n; k++) {
+                const pPrev = pts[Math.max(0, k - 1)];
+                const pNext = pts[Math.min(n - 1, k + 1)];
+                let tx = pNext.x - pPrev.x;
+                let ty = pNext.y - pPrev.y;
+                const tLen = Math.hypot(tx, ty) || 1;
+                tx /= tLen;
+                ty /= tLen;
+                const nx = -ty;
+                const ny = tx;
+
+                const t = k / (n - 1);
+                const fadeW = Math.min(1, pts[k].fade * 1.15);
+                const wave = 1 + 0.16 * Math.sin(t * 9.5 - pulsePhase);
+                const headTaper = t > 0.9 ? Math.sin(((1 - t) / 0.1) * (Math.PI * 0.5)) * 0.28 + 0.72 : 1;
+                const halfW = baseWidth * 0.5 * Math.pow(t, 0.72) * fadeW * wave * headTaper;
+                const coreHalfW = halfW * 0.38;
+                const auraHalfW = halfW * 2.05;
+
+                leftPts.push({ x: pts[k].x + nx * halfW, y: pts[k].y + ny * halfW });
+                rightPts.push({ x: pts[k].x - nx * halfW, y: pts[k].y - ny * halfW });
+                coreLeft.push({ x: pts[k].x + nx * coreHalfW, y: pts[k].y + ny * coreHalfW });
+                coreRight.push({ x: pts[k].x - nx * coreHalfW, y: pts[k].y - ny * coreHalfW });
+                auraLeft.push({ x: pts[k].x + nx * auraHalfW, y: pts[k].y + ny * auraHalfW });
+                auraRight.push({ x: pts[k].x - nx * auraHalfW, y: pts[k].y - ny * auraHalfW });
+              }
+
+              // Smooth quadratic-midpoint spline fill so curves bend like silk
+              const fillRibbonPoly = (lPts: { x: number; y: number }[], rPts: { x: number; y: number }[]) => {
                 ctx.beginPath();
-                ctx.moveTo(pts[0].x, pts[0].y);
-                if (pts.length === 2) {
-                  ctx.lineTo(pts[1].x, pts[1].y);
-                } else {
-                  for (let k = 1; k < pts.length - 1; k++) {
-                    const mx = (pts[k].x + pts[k + 1].x) * 0.5;
-                    const my = (pts[k].y + pts[k + 1].y) * 0.5;
-                    ctx.quadraticCurveTo(pts[k].x, pts[k].y, mx, my);
-                  }
-                  ctx.lineTo(last.x, last.y);
+                ctx.moveTo(lPts[0].x, lPts[0].y);
+                for (let k = 1; k < lPts.length - 1; k++) {
+                  const mx = (lPts[k].x + lPts[k + 1].x) * 0.5;
+                  const my = (lPts[k].y + lPts[k + 1].y) * 0.5;
+                  ctx.quadraticCurveTo(lPts[k].x, lPts[k].y, mx, my);
                 }
+                const lLast = lPts[lPts.length - 1];
+                const rLast = rPts[rPts.length - 1];
+                ctx.lineTo(lLast.x, lLast.y);
+                ctx.quadraticCurveTo(
+                  (lLast.x + rLast.x) * 0.5 + (last.x - pts[Math.max(0, n - 2)].x) * 0.25,
+                  (lLast.y + rLast.y) * 0.5 + (last.y - pts[Math.max(0, n - 2)].y) * 0.25,
+                  rLast.x,
+                  rLast.y
+                );
+                for (let k = rPts.length - 2; k >= 1; k--) {
+                  const mx = (rPts[k].x + rPts[k - 1].x) * 0.5;
+                  const my = (rPts[k].y + rPts[k - 1].y) * 0.5;
+                  ctx.quadraticCurveTo(rPts[k].x, rPts[k].y, mx, my);
+                }
+                ctx.lineTo(rPts[0].x, rPts[0].y);
+                ctx.closePath();
+                ctx.fill();
               };
 
               const makeGrad = (cTail: string, cMid: string, cHead: string) => {
                 if (Math.hypot(last.x - first.x, last.y - first.y) < 1) return cHead;
                 const g = ctx.createLinearGradient(first.x, first.y, last.x, last.y);
                 g.addColorStop(0, cTail);
-                g.addColorStop(0.45, cMid);
+                g.addColorStop(0.42, cMid);
                 g.addColorStop(1, cHead);
                 return g;
               };
 
               ctx.save();
-              ctx.lineCap = 'round';
-              ctx.lineJoin = 'round';
+              // Layer 1: Soft Atmospheric Halo
+              ctx.globalAlpha = 0.18 * headFade;
+              ctx.fillStyle = makeGrad(tailColor, haloColor, haloColor);
+              fillRibbonPoly(auraLeft, auraRight);
 
-              // Layer 1: Soft Outer Ambient Aura (whisper-light transparent glow)
-              traceSmoothSpline();
-              ctx.globalAlpha = 0.045 * headFade;
-              ctx.strokeStyle = haloColor;
-              ctx.lineWidth = lineW * 1.6;
-              ctx.stroke();
+              // Layer 2: Rich Tapered Soul Body
+              ctx.globalAlpha = 0.46 * headFade;
+              ctx.fillStyle = makeGrad(tailColor, midColor, headColor);
+              fillRibbonPoly(leftPts, rightPts);
 
-              // Layer 2: Translucent Continuous Rounded Stream Body
-              traceSmoothSpline();
-              ctx.globalAlpha = 0.16 * headFade;
-              ctx.strokeStyle = makeGrad(tailColor, midColor, headColor);
-              ctx.lineWidth = lineW * 0.8;
-              ctx.stroke();
-
-              // Layer 3: Delicate Inner Sheen
-              traceSmoothSpline();
-              ctx.globalAlpha = 0.08 * headFade;
-              ctx.strokeStyle = makeGrad(tailColor, sheenColor, sheenColor);
-              ctx.lineWidth = lineW * 0.32;
-              ctx.stroke();
-
+              // Layer 3: Luminous Inner Energy Filament
+              ctx.globalAlpha = 0.58 * headFade;
+              ctx.fillStyle = makeGrad(tailColor, midColor, coreColor);
+              fillRibbonPoly(coreLeft, coreRight);
               ctx.restore();
             };
 
@@ -3440,7 +5837,7 @@ export function PiggyDuelPlugin({
             for (let i = 1; i < s.piggyTrail.length; i++) {
               const p0 = s.piggyTrail[i - 1];
               const p1 = s.piggyTrail[i];
-              if (Math.hypot(p1.x1 - p0.x1, p1.y1 - p0.y1) > 190) {
+              if (Math.hypot(p1.cx - p0.cx, p1.cy - p0.cy) > 195) {
                 if (curChunk.length >= 2) chunks.push(curChunk);
                 curChunk = [p1];
               } else {
@@ -3449,42 +5846,222 @@ export function PiggyDuelPlugin({
             }
             if (curChunk.length >= 2) chunks.push(curChunk);
 
+            const pulseT = now * 0.012;
             for (const ch of chunks) {
               const headPt = ch[ch.length - 1];
-              const upperPts = ch.map((p) => ({
-                x: p.x1,
-                y: p.y1,
-                fade: Math.max(0, p.life / p.maxLife),
-              }));
-              const lowerPts = ch.map((p) => ({
-                x: p.x2,
-                y: p.y2,
-                fade: Math.max(0, p.life / p.maxLife),
-              }));
+              const isBallChunk = headPt.ballM > 0.28;
 
-              // Trail 1: Upper Translucent Brass-Gold Stream
-              drawSolidTrail(
-                upperPts,
-                9,
-                'rgba(180, 83, 9, 0.22)',
-                'rgba(245, 158, 11, 0)',
-                'rgba(217, 119, 6, 0.45)',
-                'rgba(245, 158, 11, 0.62)',
-                'rgba(253, 230, 138, 0.55)'
-              );
+              if (isBallChunk) {
+                // Supple Bouncy Ball Wake: Silky undulating comet ribbon + braided spin-whips + elastic slipstream beads
+                const chLen = ch.length;
+                const centerPts: { x: number; y: number; fade: number }[] = [];
+                const helixA: { x: number; y: number; fade: number }[] = [];
+                const helixB: { x: number; y: number; fade: number }[] = [];
+                const whipC: { x: number; y: number; fade: number }[] = [];
 
-              // Trail 2: Lower Translucent Jetpack Stream (during flight) OR Emerald Wealth Stream (when loaded)
-              const isJet = headPt.thr > 0.25;
-              const isRich = headPt.belly > 0.28;
-              drawSolidTrail(
-                lowerPts,
-                isJet ? 11 : 8,
-                isJet ? 'rgba(234, 88, 12, 0.22)' : isRich ? 'rgba(21, 128, 61, 0.2)' : 'rgba(146, 64, 14, 0.18)',
-                isJet ? 'rgba(249, 115, 22, 0)' : isRich ? 'rgba(34, 197, 94, 0)' : 'rgba(217, 119, 6, 0)',
-                isJet ? 'rgba(234, 88, 12, 0.48)' : isRich ? 'rgba(22, 163, 74, 0.46)' : 'rgba(180, 83, 9, 0.42)',
-                isJet ? 'rgba(251, 146, 60, 0.65)' : isRich ? 'rgba(34, 197, 94, 0.62)' : 'rgba(217, 119, 6, 0.58)',
-                isJet ? 'rgba(254, 240, 138, 0.55)' : isRich ? 'rgba(187, 247, 208, 0.55)' : 'rgba(253, 230, 138, 0.5)'
-              );
+                for (let k = 0; k < chLen; k++) {
+                  const p = ch[k];
+                  const pPrev = ch[Math.max(0, k - 1)];
+                  const pNext = ch[Math.min(chLen - 1, k + 1)];
+                  let tx = pNext.cx - pPrev.cx;
+                  let ty = pNext.cy - pPrev.cy;
+                  const tLen = Math.hypot(tx, ty) || 1;
+                  tx /= tLen;
+                  ty /= tLen;
+                  const nx = -ty;
+                  const ny = tx;
+
+                  const frac = k / (chLen - 1);
+                  const fade = Math.max(0, p.life / p.maxLife);
+                  const tailCurl = Math.pow(1 - frac, 1.35);
+                  const suppleWave = Math.sin(frac * 9.5 - pulseT * 1.15) * 10.5 * tailCurl * p.ballM;
+                  const cxS = p.cx + nx * suppleWave;
+                  const cyS = p.cy + ny * suppleWave;
+                  centerPts.push({ x: cxS, y: cyS, fade });
+
+                  const bellEnv = Math.sin(frac * Math.PI * 0.88);
+                  const rad = (10 + 28 * bellEnv) * p.ballM;
+                  const phase = (p.ballAng * Math.PI) / 180 + (1 - frac) * 2.4;
+                  const offA = Math.sin(phase) * rad;
+                  const offB = Math.sin(phase + Math.PI * 0.72) * rad * 0.88;
+                  const offC = Math.cos(phase * 1.5 - pulseT * 0.5) * (8 + 14 * tailCurl) * p.ballM;
+
+                  helixA.push({ x: cxS + nx * offA, y: cyS + ny * offA, fade });
+                  helixB.push({ x: cxS - nx * offB, y: cyS - ny * offB, fade });
+                  whipC.push({ x: cxS + nx * offC, y: cyS + ny * offC, fade });
+                }
+
+                const elasticSpread = 1 + Math.min(0.45, Math.abs(headPt.squash) * 0.85);
+                const ballW = (28 + Math.min(20, headPt.speed * 0.015) + headPt.belly * 10) * elasticSpread;
+                const isRich = headPt.belly > 0.32;
+                const isNervousBall = headPt.nervous > 0.35;
+
+                drawSoulRibbon(
+                  centerPts,
+                  ballW,
+                  isNervousBall
+                    ? 'rgba(239, 68, 68, 0.28)'
+                    : isRich
+                    ? 'rgba(22, 163, 74, 0.26)'
+                    : 'rgba(217, 119, 6, 0.28)',
+                  'rgba(245, 158, 11, 0)',
+                  isNervousBall
+                    ? 'rgba(220, 38, 38, 0.4)'
+                    : isRich
+                    ? 'rgba(34, 197, 94, 0.38)'
+                    : 'rgba(234, 88, 12, 0.38)',
+                  isNervousBall
+                    ? 'rgba(248, 113, 113, 0.62)'
+                    : isRich
+                    ? 'rgba(74, 222, 128, 0.58)'
+                    : 'rgba(251, 191, 36, 0.62)',
+                  isNervousBall ? 'rgba(254, 226, 226, 0.72)' : 'rgba(254, 240, 138, 0.74)',
+                  0.44,
+                  pulseT
+                );
+
+                // Supple braided silk spin-strands
+                drawSoulRibbon(
+                  helixA,
+                  10.5,
+                  isNervousBall ? 'rgba(248, 113, 113, 0.26)' : 'rgba(251, 191, 36, 0.26)',
+                  'rgba(245, 158, 11, 0)',
+                  isNervousBall ? 'rgba(239, 68, 68, 0.4)' : 'rgba(251, 146, 60, 0.4)',
+                  isNervousBall ? 'rgba(252, 165, 165, 0.58)' : 'rgba(253, 224, 71, 0.6)',
+                  'rgba(255, 251, 235, 0.7)',
+                  0.38,
+                  pulseT + 1.4
+                );
+                drawSoulRibbon(
+                  helixB,
+                  9,
+                  isRich ? 'rgba(34, 197, 94, 0.24)' : 'rgba(217, 119, 6, 0.24)',
+                  'rgba(245, 158, 11, 0)',
+                  isRich ? 'rgba(22, 163, 74, 0.38)' : 'rgba(217, 119, 6, 0.38)',
+                  isRich ? 'rgba(74, 222, 128, 0.55)' : 'rgba(245, 158, 11, 0.55)',
+                  'rgba(254, 249, 195, 0.65)',
+                  0.34,
+                  pulseT + 2.9
+                );
+                drawSoulRibbon(
+                  whipC,
+                  5.5,
+                  'rgba(254, 240, 138, 0.28)',
+                  'rgba(254, 240, 138, 0)',
+                  isNervousBall ? 'rgba(251, 146, 60, 0.45)' : 'rgba(251, 191, 36, 0.45)',
+                  'rgba(254, 249, 195, 0.7)',
+                  'rgba(255, 255, 255, 0.82)',
+                  0.42,
+                  pulseT + 4.3
+                );
+
+                // Soft elastic slipstream ghost-pearls trailing in the curved wake
+                if (chLen >= 6) {
+                  const ballR = getBallSvgRadius(headPt.belly) * PIGGY_SCALE;
+                  const step = Math.max(4, Math.floor(chLen / 5));
+                  for (let bi = Math.max(1, chLen - 4); bi >= 1; bi -= step) {
+                    const cp = centerPts[bi];
+                    const pRaw = ch[bi];
+                    const frac = bi / (chLen - 1);
+                    const pearlR = ballR * (0.16 + 0.46 * frac);
+                    const prevCp = centerPts[Math.max(0, bi - 1)];
+                    const ang = Math.atan2(cp.y - prevCp.y, cp.x - prevCp.x);
+                    const stretch = 1 + Math.min(0.45, pRaw.speed / 1350);
+
+                    ctx.save();
+                    ctx.translate(cp.x, cp.y);
+                    ctx.rotate(ang);
+                    ctx.scale(stretch, 1 / stretch);
+                    ctx.globalAlpha = cp.fade * frac * 0.22;
+                    const pGrad = ctx.createRadialGradient(0, 0, pearlR * 0.1, 0, 0, pearlR);
+                    pGrad.addColorStop(0, isNervousBall ? 'rgba(254, 202, 202, 0.8)' : 'rgba(254, 240, 138, 0.85)');
+                    pGrad.addColorStop(
+                      0.6,
+                      isNervousBall
+                        ? 'rgba(239, 68, 68, 0.45)'
+                        : isRich
+                        ? 'rgba(74, 222, 128, 0.45)'
+                        : 'rgba(245, 158, 11, 0.45)'
+                    );
+                    pGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+                    ctx.fillStyle = pGrad;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, pearlR, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                  }
+                }
+              } else {
+                const upperPts = ch.map((p) => ({
+                  x: p.x1,
+                  y: p.y1,
+                  fade: Math.max(0, p.life / p.maxLife),
+                }));
+                const lowerPts = ch.map((p) => ({
+                  x: p.x2,
+                  y: p.y2,
+                  fade: Math.max(0, p.life / p.maxLife),
+                }));
+
+                // Trail 1: Upper Tapered Brass-Gold Silk Soul Stream
+                drawSoulRibbon(
+                  upperPts,
+                  14 + Math.min(8, headPt.speed * 0.008),
+                  'rgba(217, 119, 6, 0.3)',
+                  'rgba(245, 158, 11, 0)',
+                  'rgba(217, 119, 6, 0.58)',
+                  'rgba(245, 158, 11, 0.82)',
+                  'rgba(254, 240, 138, 0.9)',
+                  0.9,
+                  pulseT
+                );
+
+                // Trail 2: Lower Tapered Jetpack Stream (flight) OR Emerald Wealth Stream (loaded)
+                const isJet = headPt.thr > 0.25;
+                const isRich = headPt.belly > 0.28;
+                const isNervousTrail = headPt.nervous > 0.35;
+                drawSoulRibbon(
+                  lowerPts,
+                  (isJet ? 18 : 13) + Math.min(10, headPt.speed * 0.009),
+                  isNervousTrail
+                    ? 'rgba(239, 68, 68, 0.34)'
+                    : isJet
+                    ? 'rgba(234, 88, 12, 0.32)'
+                    : isRich
+                    ? 'rgba(21, 128, 61, 0.28)'
+                    : 'rgba(180, 83, 9, 0.26)',
+                  isNervousTrail
+                    ? 'rgba(239, 68, 68, 0)'
+                    : isJet
+                    ? 'rgba(249, 115, 22, 0)'
+                    : isRich
+                    ? 'rgba(34, 197, 94, 0)'
+                    : 'rgba(217, 119, 6, 0)',
+                  isNervousTrail
+                    ? 'rgba(220, 38, 38, 0.65)'
+                    : isJet
+                    ? 'rgba(234, 88, 12, 0.62)'
+                    : isRich
+                    ? 'rgba(22, 163, 74, 0.58)'
+                    : 'rgba(180, 83, 9, 0.54)',
+                  isNervousTrail
+                    ? 'rgba(248, 113, 113, 0.9)'
+                    : isJet
+                    ? 'rgba(251, 146, 60, 0.88)'
+                    : isRich
+                    ? 'rgba(74, 222, 128, 0.85)'
+                    : 'rgba(245, 158, 11, 0.8)',
+                  isNervousTrail
+                    ? 'rgba(254, 226, 226, 0.94)'
+                    : isJet
+                    ? 'rgba(255, 251, 235, 0.92)'
+                    : isRich
+                    ? 'rgba(187, 247, 208, 0.9)'
+                    : 'rgba(254, 240, 138, 0.85)',
+                  0.95,
+                  pulseT + 1.1
+                );
+              }
             }
           }
 
@@ -3512,13 +6089,17 @@ export function PiggyDuelPlugin({
             const expireShrink = p.life < 0.34 ? 0.35 + 0.65 * expireFade : 1;
 
             if (p.trail && p.trail.length >= 2) {
+              const pwr = p.power ?? 0;
               ctx.save();
               ctx.globalAlpha = expireFade;
               ctx.lineCap = 'round';
               for (let ti = 1; ti < p.trail.length; ti++) {
                 const tf = ti / p.trail.length;
-                ctx.strokeStyle = `rgba(245, 158, 11, ${(tf * 0.38).toFixed(3)})`;
-                ctx.lineWidth = Math.max(1.8, tf * 9.5 * expireShrink);
+                ctx.strokeStyle =
+                  pwr >= 0.72
+                    ? `rgba(56, 189, 248, ${(tf * 0.54).toFixed(3)})`
+                    : `rgba(245, 158, 11, ${(tf * 0.38).toFixed(3)})`;
+                ctx.lineWidth = Math.max(1.8, tf * (9.5 + pwr * 5) * expireShrink);
                 ctx.beginPath();
                 ctx.moveTo(p.trail[ti - 1].x, p.trail[ti - 1].y);
                 ctx.lineTo(p.trail[ti].x, p.trail[ti].y);
@@ -3544,13 +6125,13 @@ export function PiggyDuelPlugin({
               ctx.restore();
             }
 
-            // Warm subtle aura behind active coin
-            const coinAura = ctx.createRadialGradient(0, 0, p.r * 0.2, 0, 0, p.r * 1.65);
-            coinAura.addColorStop(0, 'rgba(253, 224, 71, 0.24)');
+            // Warm subtle aura behind active coin (radiant sky-gold for charged power coins)
+            const coinAura = ctx.createRadialGradient(0, 0, p.r * 0.2, 0, 0, p.r * (1.65 + (p.power ?? 0) * 0.55));
+            coinAura.addColorStop(0, (p.power ?? 0) >= 0.72 ? 'rgba(56, 189, 248, 0.36)' : 'rgba(253, 224, 71, 0.24)');
             coinAura.addColorStop(1, 'rgba(245, 158, 11, 0)');
             ctx.fillStyle = coinAura;
             ctx.beginPath();
-            ctx.arc(0, 0, p.r * 1.65, 0, Math.PI * 2);
+            ctx.arc(0, 0, p.r * (1.65 + (p.power ?? 0) * 0.55), 0, Math.PI * 2);
             ctx.fill();
 
             ctx.rotate((p.rot * Math.PI) / 180);
@@ -3753,6 +6334,366 @@ export function PiggyDuelPlugin({
             ctx.restore();
           }
 
+          // Seam Fracture Rays during Overpressure Buildup + Expanding Shockwave Rings
+          if (s.bossAction === 'BREAKING') {
+            const breakElapsed = Math.max(0, s.breakMax - s.breakTimer);
+            if (breakElapsed > 0.06 && breakElapsed < 0.45) {
+              const rayAlpha =
+                breakElapsed < 0.36
+                  ? Math.min(0.85, (breakElapsed - 0.06) / 0.22)
+                  : Math.max(0, 1 - (breakElapsed - 0.36) / 0.09);
+              ctx.save();
+              ctx.translate(s.breakPx, piggyCenterY);
+              ctx.rotate(breakElapsed * 1.4);
+              for (let ri = 0; ri < 8; ri++) {
+                const ang = (ri * Math.PI) / 4 + Math.sin(breakElapsed * 12 + ri) * 0.08;
+                const len = 95 + breakElapsed * 420 + (ri % 2) * 45;
+                ctx.save();
+                ctx.rotate(ang);
+                const rGrad = ctx.createLinearGradient(0, 0, len, 0);
+                rGrad.addColorStop(0, `rgba(254, 240, 138, ${rayAlpha.toFixed(3)})`);
+                rGrad.addColorStop(0.45, `rgba(245, 158, 11, ${(rayAlpha * 0.55).toFixed(3)})`);
+                rGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+                ctx.fillStyle = rGrad;
+                ctx.beginPath();
+                ctx.moveTo(0, -4);
+                ctx.lineTo(len, -18);
+                ctx.lineTo(len, 18);
+                ctx.lineTo(0, 4);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+              }
+              ctx.restore();
+            }
+          }
+
+          for (let i = s.shockwaves.length - 1; i >= 0; i--) {
+            const sw = s.shockwaves[i];
+            sw.life -= rawDt;
+            if (sw.life <= 0) {
+              s.shockwaves.splice(i, 1);
+              continue;
+            }
+            const t = 1 - sw.life / sw.maxLife;
+            const easeOut = 1 - Math.pow(1 - t, 3);
+            const curR = sw.r + (sw.maxR - sw.r) * easeOut;
+            const alpha = Math.max(0, 1 - t);
+            ctx.save();
+            ctx.globalAlpha = alpha * 0.85;
+            ctx.strokeStyle = sw.color;
+            ctx.lineWidth = Math.max(1.5, sw.lineWidth * (1 - t * 0.78));
+            ctx.beginPath();
+            ctx.arc(sw.x, sw.y, curR, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = alpha * 0.22;
+            ctx.fillStyle = sw.color;
+            ctx.beginPath();
+            ctx.arc(sw.x, sw.y, curR * 0.92, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+
+          // Precision Machined Mechanical Hardware (Threaded Screws, Hex Bolts, Washers, Spoked Gears, Coiled Springs, Hex Nuts & Heavy Armor Plates)
+          for (let i = s.debrisItems.length - 1; i >= 0; i--) {
+            const db = s.debrisItems[i];
+            db.life -= rawDt;
+            if (db.life <= 0) {
+              s.debrisItems.splice(i, 1);
+              continue;
+            }
+            const mass = db.mass ?? 1;
+            const bounceK = db.bounce ?? 0.42;
+            db.vy += (1560 + mass * 340) * rawDt;
+            db.x += db.vx * rawDt;
+            db.y += db.vy * rawDt;
+            db.rot += db.vrot * rawDt;
+
+            if (db.x < MIN_X + 12) {
+              db.x = MIN_X + 12;
+              db.vx = Math.abs(db.vx) * 0.65;
+            } else if (db.x > MAX_X - 12) {
+              db.x = MAX_X - 12;
+              db.vx = -Math.abs(db.vx) * 0.65;
+            }
+
+            if (db.y >= FLOOR_Y - db.r * 0.65) {
+              db.y = FLOOR_Y - db.r * 0.65;
+              const spd = Math.abs(db.vy);
+              if (spd > 85) {
+                db.vy = -spd * bounceK;
+                db.vx *= mass >= 1.4 ? 0.64 : 0.74;
+                db.vrot *= mass >= 1.4 ? 0.48 : 0.65;
+                db.bounces += 1;
+                if (db.bounces === 1 && spd > 210 && Math.random() < 0.28) {
+                  synthRef.current?.playHardwareClink(db.kind === 'screw' || db.kind === 'washer' ? 1.15 : 0.85);
+                }
+              } else {
+                db.vy = 0;
+                db.vx *= Math.max(0, 1 - rawDt * (6 + mass * 2));
+                db.vrot *= Math.max(0, 1 - rawDt * (8 + mass * 2));
+              }
+            }
+
+            const dAlpha = db.life < 0.35 ? Math.max(0, db.life / 0.35) : 1;
+
+            // Ground shadow beneath airborne/resting hardware
+            const hAbove = Math.max(0, FLOOR_Y - db.r * 0.65 - db.y);
+            if (hAbove < 280) {
+              const sFrac = 1 - hAbove / 280;
+              ctx.save();
+              ctx.globalAlpha = dAlpha * 0.22 * sFrac;
+              ctx.fillStyle = '#231A10';
+              ctx.beginPath();
+              ctx.ellipse(db.x, FLOOR_Y + 3, db.r * (0.65 + 0.35 * sFrac), Math.max(1.8, db.r * 0.18 * sFrac), 0, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+            }
+
+            ctx.save();
+            ctx.globalAlpha = dAlpha;
+            ctx.translate(db.x, db.y);
+            ctx.rotate((db.rot * Math.PI) / 180);
+            ctx.strokeStyle = '#23160A';
+            ctx.lineWidth = 1.6;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+
+            if (db.kind === 'screw') {
+              // Machined Brass/Steel Threaded Screw with Bevel Head, Collar & Helical Threads
+              const shLen = db.r * 1.45;
+              const shW = db.r * 0.38;
+              const headR = db.r * 0.68;
+              const shGrad = ctx.createLinearGradient(-shW, 0, shW, 0);
+              shGrad.addColorStop(0, '#64748B');
+              shGrad.addColorStop(0.35, '#F1F5F9');
+              shGrad.addColorStop(0.7, '#94A3B8');
+              shGrad.addColorStop(1, '#334155');
+              ctx.fillStyle = shGrad;
+              ctx.beginPath();
+              ctx.moveTo(-shW, -shLen * 0.25);
+              ctx.lineTo(shW, -shLen * 0.25);
+              ctx.lineTo(shW * 0.72, shLen * 0.72);
+              ctx.lineTo(0, shLen * 0.96);
+              ctx.lineTo(-shW * 0.72, shLen * 0.72);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+
+              // Helical screw threads
+              ctx.strokeStyle = '#1E293B';
+              ctx.lineWidth = 1.3;
+              for (let ti = 0; ti < 4; ti++) {
+                const ty = -shLen * 0.04 + ti * (shLen * 0.2);
+                const tw = shW * (1 - ti * 0.08);
+                ctx.beginPath();
+                ctx.moveTo(-tw - 1, ty - 1.5);
+                ctx.lineTo(tw + 1, ty + 1.8);
+                ctx.stroke();
+              }
+
+              // Beveled brass flange collar + domed screw head with slot
+              ctx.strokeStyle = '#23160A';
+              ctx.lineWidth = 1.5;
+              ctx.fillStyle = '#D97706';
+              ctx.beginPath();
+              ctx.roundRect(-headR * 1.05, -shLen * 0.42, headR * 2.1, shLen * 0.22, 2);
+              ctx.fill();
+              ctx.stroke();
+
+              const hdGrad = ctx.createLinearGradient(-headR, -shLen * 0.85, headR, -shLen * 0.35);
+              hdGrad.addColorStop(0, '#FEF08A');
+              hdGrad.addColorStop(0.45, '#F59E0B');
+              hdGrad.addColorStop(1, '#92400E');
+              ctx.fillStyle = hdGrad;
+              ctx.beginPath();
+              ctx.arc(0, -shLen * 0.42, headR, Math.PI, 0);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+
+              // Center slot notch
+              ctx.fillStyle = '#23160A';
+              ctx.fillRect(-headR * 0.16, -shLen * 0.42 - headR, headR * 0.32, headR * 0.45);
+            } else if (db.kind === 'bolt') {
+              // Heavy Hex-Head Structural Bolt with Thread Ridges & Chamfered Top
+              const hw = db.r * 0.78;
+              const hh = db.r * 0.46;
+              const shW = db.r * 0.4;
+              const shL = db.r * 1.15;
+              ctx.fillStyle = '#94A3B8';
+              ctx.fillRect(-shW, 0, shW * 2, shL);
+              ctx.strokeRect(-shW, 0, shW * 2, shL);
+              ctx.strokeStyle = '#334155';
+              ctx.lineWidth = 1.4;
+              for (let ti = 0; ti < 3; ti++) {
+                const ty = shL * (0.28 + ti * 0.24);
+                ctx.beginPath();
+                ctx.moveTo(-shW - 1, ty - 1);
+                ctx.lineTo(shW + 1, ty + 1.5);
+                ctx.stroke();
+              }
+              ctx.strokeStyle = '#23160A';
+              ctx.lineWidth = 1.6;
+              const boltGrad = ctx.createLinearGradient(-hw, -hh, hw, 0);
+              boltGrad.addColorStop(0, '#FDE68A');
+              boltGrad.addColorStop(0.4, '#D97706');
+              boltGrad.addColorStop(1, '#78350F');
+              ctx.fillStyle = boltGrad;
+              ctx.beginPath();
+              ctx.roundRect(-hw, -hh, hw * 2, hh + 2, 2);
+              ctx.fill();
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(-hw * 0.36, -hh);
+              ctx.lineTo(-hw * 0.36, 2);
+              ctx.moveTo(hw * 0.36, -hh);
+              ctx.lineTo(hw * 0.36, 2);
+              ctx.stroke();
+            } else if (db.kind === 'washer') {
+              // Beveled Metallic Split-Lock Washer
+              const wGrad = ctx.createLinearGradient(-db.r, -db.r, db.r, db.r);
+              wGrad.addColorStop(0, '#FEF3C7');
+              wGrad.addColorStop(0.45, '#CBD5E1');
+              wGrad.addColorStop(1, '#475569');
+              ctx.fillStyle = wGrad;
+              ctx.beginPath();
+              ctx.arc(0, 0, db.r * 0.86, 0.22, Math.PI * 2 - 0.14);
+              ctx.arc(0, 0, db.r * 0.44, Math.PI * 2 - 0.14, 0.22, true);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+            } else if (db.kind === 'gear') {
+              // Precision Spoked Brass/Bronze Cogwheel
+              const teeth = 10;
+              const rOut = db.r * 1.12;
+              const rIn = db.r * 0.82;
+              const gGrad = ctx.createLinearGradient(-rOut, -rOut, rOut, rOut);
+              gGrad.addColorStop(0, '#FDE68A');
+              gGrad.addColorStop(0.45, db.color);
+              gGrad.addColorStop(1, '#5B3410');
+              ctx.fillStyle = gGrad;
+              ctx.beginPath();
+              for (let ti = 0; ti < teeth * 2; ti++) {
+                const a0 = (ti * Math.PI) / teeth;
+                const a1 = ((ti + 0.56) * Math.PI) / teeth;
+                const rad = ti % 2 === 0 ? rOut : rIn;
+                if (ti === 0) ctx.moveTo(Math.cos(a0) * rad, Math.sin(a0) * rad);
+                else ctx.lineTo(Math.cos(a0) * rad, Math.sin(a0) * rad);
+                ctx.lineTo(Math.cos(a1) * rad, Math.sin(a1) * rad);
+              }
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+
+              // Recessed spoked cutout ring
+              ctx.fillStyle = '#3B2511';
+              ctx.beginPath();
+              ctx.arc(0, 0, db.r * 0.54, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.strokeStyle = '#D97706';
+              ctx.lineWidth = Math.max(1.8, db.r * 0.16);
+              for (let sp = 0; sp < 4; sp++) {
+                const sa = (sp * Math.PI) / 2;
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(sa) * db.r * 0.52, Math.sin(sa) * db.r * 0.52);
+                ctx.lineTo(-Math.cos(sa) * db.r * 0.52, -Math.sin(sa) * db.r * 0.52);
+                ctx.stroke();
+              }
+              ctx.fillStyle = '#FCD34D';
+              ctx.strokeStyle = '#23160A';
+              ctx.lineWidth = 1.4;
+              ctx.beginPath();
+              ctx.arc(0, 0, db.r * 0.25, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            } else if (db.kind === 'spring') {
+              // Heavy 3D Coiled Tempered Steel Tension Spring
+              const w = db.r * 1.45;
+              const h = db.r * 0.55;
+              ctx.strokeStyle = '#1E293B';
+              ctx.lineWidth = 3.8;
+              ctx.beginPath();
+              for (let si = -3; si <= 3; si++) {
+                const sx = (si / 3) * w;
+                const sy = si % 2 === 0 ? -h : h;
+                if (si === -3) ctx.moveTo(sx, sy);
+                else ctx.lineTo(sx, sy);
+              }
+              ctx.stroke();
+              ctx.strokeStyle = '#CBD5E1';
+              ctx.lineWidth = 1.8;
+              ctx.stroke();
+            } else if (db.kind === 'nut') {
+              // Chamfered Heavy Hex Nut with Threaded Inner Bore
+              const nGrad = ctx.createLinearGradient(-db.r, -db.r, db.r, db.r);
+              nGrad.addColorStop(0, '#FEF08A');
+              nGrad.addColorStop(0.5, '#F59E0B');
+              nGrad.addColorStop(1, '#78350F');
+              ctx.fillStyle = nGrad;
+              ctx.beginPath();
+              for (let hi = 0; hi < 6; hi++) {
+                const a = (hi * Math.PI) / 3;
+                const px = Math.cos(a) * db.r * 0.96;
+                const py = Math.sin(a) * db.r * 0.96;
+                if (hi === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+              }
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+              ctx.strokeStyle = '#78350F';
+              ctx.lineWidth = 1.2;
+              ctx.beginPath();
+              ctx.arc(0, 0, db.r * 0.62, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.fillStyle = '#1F150B';
+              ctx.beginPath();
+              ctx.arc(0, 0, db.r * 0.36, 0, Math.PI * 2);
+              ctx.fill();
+            } else {
+              // Heavy Cast-Brass Riveted Armor Plate Shard
+              const pw = db.r * 1.28;
+              const ph = db.r * 0.82;
+              const pGrad = ctx.createLinearGradient(-pw, -ph, pw, ph);
+              pGrad.addColorStop(0, '#E3BD7E');
+              pGrad.addColorStop(0.45, '#9A723A');
+              pGrad.addColorStop(1, '#432D15');
+              ctx.fillStyle = pGrad;
+              ctx.beginPath();
+              ctx.moveTo(-pw * 0.88, -ph);
+              ctx.lineTo(pw * 0.72, -ph * 0.85);
+              ctx.lineTo(pw, ph * 0.62);
+              ctx.lineTo(-pw * 0.65, ph);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+              ctx.strokeStyle = '#FEF3C7';
+              ctx.lineWidth = 1.1;
+              ctx.globalAlpha *= 0.5;
+              ctx.beginPath();
+              ctx.moveTo(-pw * 0.72, -ph * 0.8);
+              ctx.lineTo(pw * 0.58, -ph * 0.68);
+              ctx.stroke();
+              ctx.globalAlpha = dAlpha;
+              ctx.fillStyle = '#FDE68A';
+              ctx.strokeStyle = '#23160A';
+              ctx.lineWidth = 1;
+              for (const [rx, ry] of [
+                [-pw * 0.45, -ph * 0.4],
+                [pw * 0.42, ph * 0.25],
+              ]) {
+                ctx.beginPath();
+                ctx.arc(rx, ry, db.r * 0.16, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+              }
+            }
+            ctx.restore();
+          }
+
           // Floating Money-Hurt Text
           for (let i = s.floaters.length - 1; i >= 0; i--) {
             const fl = s.floaters[i];
@@ -3771,16 +6712,93 @@ export function PiggyDuelPlugin({
             ctx.restore();
           }
 
-          // Hand-Orbit Revolver Cylinder & Reload Threshold Circle
+          // Glowing Hand-to-Piggy Collider Contact Arc & Armor Ripple
+          if (s.handShieldFlash > 0.02 && (s.phase === 'PLAYING' || s.phase === 'TITLE_MENU')) {
+            const flashFrac = Math.min(1, s.handShieldFlash / 0.28);
+            const contactAng = Math.atan2(s.handContactNy, s.handContactNx);
+            const shieldCol = s.ballMorph > 0.35 ? '#38BDF8' : s.nervousLevel > 0.4 ? '#EF4444' : '#F59E0B';
+            ctx.save();
+            ctx.translate(s.handContactX, s.handContactY);
+            ctx.globalAlpha = flashFrac * 0.85;
+            ctx.strokeStyle = shieldCol;
+            ctx.lineWidth = 4.5 * flashFrac;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.arc(0, 0, 26 + (1 - flashFrac) * 18, contactAng - 0.95, contactAng + 0.95);
+            ctx.stroke();
+            ctx.strokeStyle = '#FEF9C3';
+            ctx.lineWidth = 2 * flashFrac;
+            ctx.beginPath();
+            ctx.arc(0, 0, 18 + (1 - flashFrac) * 12, contactAng - 0.72, contactAng + 0.72);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Hand-Orbit Revolver Cylinder, Charge Power Meter & Reload Threshold Circle
           if (s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') {
             ctx.save();
-            ctx.translate(s.cx, s.cy);
+            ctx.translate(s.cx + s.handOffsetX, s.cy + s.handHopY + s.handOffsetY);
+
+            if (s.handShieldFlash > 0.02) {
+              const hf = Math.min(1, s.handShieldFlash / 0.28);
+              const inwardAng = Math.atan2(-s.handContactNy, -s.handContactNx);
+              ctx.save();
+              ctx.globalAlpha = hf * 0.88;
+              ctx.strokeStyle = s.ballMorph > 0.35 ? '#38BDF8' : '#F59E0B';
+              ctx.lineWidth = 4;
+              ctx.lineCap = 'round';
+              ctx.beginPath();
+              ctx.arc(0, 0, 32, inwardAng - 0.85, inwardAng + 0.85);
+              ctx.stroke();
+              ctx.restore();
+            }
 
             const thresholdR = 62;
             const orbitChamberR = 46;
             const topAng = -Math.PI / 2;
             const reloadFrac = s.isReloading ? Math.min(1, s.reloadTimer / s.reloadDuration) : 1;
             const chamberRatio = s.revolverChambers / s.revolverMax;
+
+            // Outer Charge Power Meter / Extended Glide Ring
+            if (s.handCharge > 0.02 || s.handGlideTimer > 0) {
+              const meterR = 74;
+              const isCharging = s.handCharge > 0.02;
+              const meterFrac = isCharging ? s.handCharge : Math.min(1, s.handGlideTimer / 0.55);
+              const meterColor = isCharging
+                ? s.handCharge >= 0.78
+                  ? '#EF4444'
+                  : s.handCharge >= 0.35
+                  ? '#F59E0B'
+                  : '#0EA5E9'
+                : '#38BDF8';
+
+              ctx.strokeStyle = 'rgba(35, 26, 16, 0.14)';
+              ctx.lineWidth = 4;
+              ctx.beginPath();
+              ctx.arc(0, 0, meterR, 0, Math.PI * 2);
+              ctx.stroke();
+
+              ctx.strokeStyle = meterColor;
+              ctx.lineWidth = 5.5;
+              ctx.lineCap = 'round';
+              ctx.beginPath();
+              ctx.arc(0, 0, meterR, topAng, topAng + Math.PI * 2 * meterFrac);
+              ctx.stroke();
+
+              ctx.fillStyle = meterColor;
+              ctx.font = '800 11px "JetBrains Mono", monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'bottom';
+              ctx.fillText(
+                isCharging
+                  ? s.handCharge >= 0.96
+                    ? 'MAX POWER'
+                    : `CHARGE ${Math.round(s.handCharge * 100)}%`
+                  : 'GLIDE',
+                0,
+                -meterR - 8
+              );
+            }
 
             // 1. Subtle backing ring around the hand's orbit
             ctx.strokeStyle =
@@ -3923,6 +6941,24 @@ export function PiggyDuelPlugin({
             ctx.restore();
           }
 
+          // Subtle Cinematic Letterbox Framing during Piggy Disassembly Finisher
+          if (s.bossAction === 'BREAKING') {
+            const breakElapsed = Math.max(0, s.breakMax - s.breakTimer);
+            const barIn = Math.min(1, breakElapsed / 0.22);
+            const barOut = s.breakTimer < 0.35 ? Math.max(0, s.breakTimer / 0.35) : 1;
+            const barH = 38 * barIn * barOut;
+            if (barH > 0.5) {
+              ctx.save();
+              ctx.fillStyle = 'rgba(28, 19, 10, 0.88)';
+              ctx.fillRect(0, 0, WORLD_W, barH);
+              ctx.fillRect(0, WORLD_H - barH, WORLD_W, barH);
+              ctx.fillStyle = 'rgba(245, 158, 11, 0.65)';
+              ctx.fillRect(0, barH - 2, WORLD_W, 2);
+              ctx.fillRect(0, WORLD_H - barH, WORLD_W, 2);
+              ctx.restore();
+            }
+          }
+
           ctx.restore();
         }
       }
@@ -3932,19 +6968,47 @@ export function PiggyDuelPlugin({
       if (hudTimer >= 0.06) {
         hudTimer = 0;
         const pct = Math.round(Math.min(1, s.pumpProgress / s.pumpTarget) * 100);
+        const pumpHoldPct =
+          s.pumpProgress > 0 && s.pumpHoldMax > 0
+            ? Math.round(Math.min(1, Math.max(0, s.pumpHoldTimer / s.pumpHoldMax)) * 100)
+            : 0;
         const pat = ROUND_PATTERNS[s.patternIndex % ROUND_PATTERNS.length];
-        const actionLabel =
+        const nervousPct = Math.round(Math.min(1, Math.max(0, s.nervousLevel)) * 100);
+        const isNervous = s.bossAction !== 'BREAKING' && s.nervousLevel >= 0.28;
+        const isDizzy = s.bossAction !== 'BREAKING' && s.dizzyLevel >= 0.25;
+        const baseActionLabel =
           s.bossAction === 'BREAKING'
-            ? 'PIGGY EXPLODING!'
+            ? 'DISASSEMBLING!'
             : s.bossAction === 'BOUNCY_BALL'
-            ? `${pat.name} · Bouncy Ball!`
+            ? isNervous
+              ? `${pat.name} · Panic Bounce!`
+              : `${pat.name} · Bouncy Ball!`
+            : isNervous && s.bossAction === 'PATTERN_STOP'
+            ? `${pat.name} · Nervous Jitter (${s.spotIndex + 1}/${pat.spots.length})`
+            : isNervous
+            ? `${pat.name} · Volatile Dash!`
+            : s.bossAction === 'WALK'
+            ? s.playerIdleTimer >= 2.0 && s.pumpProgress === 0
+              ? `${pat.name} · Idle Walk`
+              : `${pat.name} · Walking`
             : s.bossAction === 'PATTERN_STOP'
             ? `${pat.name} · Stopped (${s.spotIndex + 1}/${pat.spots.length})`
             : s.bossAction === 'JET_FLIGHT'
             ? `${pat.name} · Jetting`
-            : pct >= 75
-            ? `${pat.name} · About to Explode!`
+            : s.pumpProgress >= 2
+            ? `${pat.name} · 1 More Coin to Break!`
             : `${pat.name} · Moving`;
+        const actionLabel = isDizzy ? `${baseActionLabel} · Dizzy!` : baseActionLabel;
+
+        const handChargePct = Math.round(Math.min(1, Math.max(0, s.handCharge)) * 100);
+        const laserElevPct = Math.round(Math.min(1, Math.max(0, s.laserElev)) * 100);
+        const handStateLabel = s.handHoldActive
+          ? `AIM ${laserElevPct}%`
+          : s.handGlideTimer > 0
+          ? 'GLIDING'
+          : s.handHopY < -4
+          ? 'HOP'
+          : '';
 
         setHud((prev) => ({
           ...prev,
@@ -3954,8 +7018,9 @@ export function PiggyDuelPlugin({
           patternName: pat.name,
           spotIndex: s.spotIndex,
           spotTotal: pat.spots.length,
-          pumpProgress: Number(s.pumpProgress.toFixed(1)),
+          pumpProgress: Number(s.pumpProgress.toFixed(0)),
           pumpTarget: s.pumpTarget,
+          pumpHoldPct,
           bellyPct: pct,
           bossActionLabel: actionLabel,
           dashReadyPct: Math.round((1 - s.dashCooldown / s.dashMaxCooldown) * 100),
@@ -3970,6 +7035,10 @@ export function PiggyDuelPlugin({
           laserLabel: LASER_PROFILES[s.laserStyle].shortLabel,
           laserCurved: LASER_PROFILES[s.laserStyle].curved,
           laserModeSetting: s.laserModeSetting,
+          nervousPct,
+          isNervous,
+          handChargePct,
+          handStateLabel,
         }));
       }
 
@@ -3978,7 +7047,7 @@ export function PiggyDuelPlugin({
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [applyLaserStyle, setupRound, storageKey, throwCoin]);
+  }, [applyLaserStyle, setupRound, storageKey]);
 
   const togglePause = () => {
     const s = simRef.current;
@@ -4058,21 +7127,43 @@ export function PiggyDuelPlugin({
           </div>
         </div>
 
-        {/* Center Progressive Fill-to-Explode Meter */}
+        {/* Center 3-Coins-in-a-Row & Keep-Pumped Pressure Meter */}
         <div className="flex-1 max-w-lg flex items-center gap-3">
-          <div className="flex-1 min-w-[140px]">
+          <div className="flex-1 min-w-[160px]">
             <div className="flex items-center justify-between text-[11px] font-medium mb-1">
-              <span className="font-semibold text-[#231A10]">Piggy Fill · Round {hud.round}</span>
-              <span className={`font-mono-tabular font-semibold ${hud.bellyPct >= 75 ? 'text-[#DC2626]' : 'text-[#5A4A38]'}`}>
-                {hud.pumpProgress}/{hud.pumpTarget} Coins · {hud.bellyPct}% {hud.bellyPct >= 75 ? 'ABOUT TO POP!' : ''}
-              </span>
+              <span className="font-semibold text-[#231A10]">3 in a Row · Round {hud.round}</span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1" aria-label={`${hud.pumpProgress} of ${hud.pumpTarget} coins in a row`}>
+                  {Array.from({ length: hud.pumpTarget }).map((_, i) => (
+                    <span
+                      key={i}
+                      className={`w-2.5 h-2.5 rounded-full border transition-all ${
+                        i < hud.pumpProgress
+                          ? hud.pumpProgress >= 2
+                            ? 'bg-[#DC2626] border-[#991B1B] scale-110'
+                            : 'bg-[#22C55E] border-[#15803D]'
+                          : 'bg-[#E8E0D2] border-[#231A10]/20'
+                      }`}
+                    />
+                  ))}
+                </div>
+                <span className={`font-mono-tabular font-semibold ${hud.pumpProgress >= 2 ? 'text-[#DC2626]' : 'text-[#5A4A38]'}`}>
+                  {hud.pumpProgress}/{hud.pumpTarget} {hud.pumpProgress >= 2 ? '1 MORE TO POP!' : ''}
+                </span>
+              </div>
             </div>
-            <div className="h-2.5 w-full rounded-full bg-[#E8E0D2] overflow-hidden border border-[#231A10]/10">
+            <div className="h-2.5 w-full rounded-full bg-[#E8E0D2] overflow-hidden border border-[#231A10]/10" title="Keep the piggy pumped before pressure vents">
               <div
                 className={`h-full transition-all duration-100 ${
-                  hud.bellyPct >= 75 ? 'bg-[#DC2626]' : hud.bellyPct >= 40 ? 'bg-[#D97706]' : 'bg-[#B45309]'
+                  hud.pumpProgress >= 2
+                    ? hud.pumpHoldPct < 35
+                      ? 'bg-[#DC2626]'
+                      : 'bg-[#F59E0B]'
+                    : hud.pumpProgress >= 1
+                    ? 'bg-[#22C55E]'
+                    : 'bg-[#B45309]'
                 }`}
-                style={{ width: `${hud.bellyPct}%` }}
+                style={{ width: `${hud.pumpProgress > 0 ? hud.pumpHoldPct : 0}%` }}
               />
             </div>
           </div>
@@ -4218,6 +7309,22 @@ export function PiggyDuelPlugin({
                 <feComponentTransfer>
                   <feFuncA type="linear" slope="0.52" />
                 </feComponentTransfer>
+              </filter>
+
+              <filter id="nervous-red-shader" x="-25%" y="-25%" width="150%" height="150%" colorInterpolationFilters="sRGB">
+                <feColorMatrix
+                  id="nervous-color-matrix"
+                  type="matrix"
+                  values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"
+                />
+                <feDropShadow
+                  id="nervous-red-glow"
+                  dx="0"
+                  dy="0"
+                  stdDeviation="10"
+                  floodColor="#EF4444"
+                  floodOpacity="0"
+                />
               </filter>
 
               <linearGradient id="brass-body-main" x1="12%" y1="35%" x2="88%" y2="55%">
@@ -4559,6 +7666,7 @@ export function PiggyDuelPlugin({
                   <g id="right-socket-g">
                     <ellipse cx="642" cy="235" rx="36" ry="52" transform="rotate(-26 642 235)" fill="#2c1e14" />
                   </g>
+                  <g id="right-arm-tuck">
                   <g id="right-arm-group">
                     <path
                       d="M 608.0 164.0 C 634.0 152.0 662.0 142.0 686.0 135.0 C 708.0 164.0 720.0 198.0 716.0 232.0 C 692.0 242.0 666.0 250.0 642.0 254.0 C 635.0 222.0 622.0 190.0 608.0 164.0 Z"
@@ -4593,106 +7701,206 @@ export function PiggyDuelPlugin({
                     />
                     <path d="M 746 125 C 762 152, 770 182, 766 212" fill="none" stroke="#895d40" strokeWidth="2.5" opacity="0.10" />
                   </g>
+                  </g>
+
+                  {/* Exposed Inner Steampunk Clockwork Boiler Vault (revealed during Disassembly) */}
+                  <g id="piggy-inner-core" opacity="0" style={{ pointerEvents: 'none' }}>
+                    <ellipse cx="552" cy="495" rx="148" ry="194" fill="#170f08" stroke="#4a351d" strokeWidth="7" />
+                    <ellipse cx="552" cy="495" rx="138" ry="184" fill="none" stroke="#a67c46" strokeWidth="2.4" opacity="0.55" />
+                    <ellipse cx="552" cy="495" rx="118" ry="160" fill="#26190e" stroke="#8b6637" strokeWidth="3.5" strokeDasharray="12 6" />
+                    {/* Radial machined bulkhead perimeter bolts & washers */}
+                    <g fill="#d9a459" stroke="#1f140a" strokeWidth="1.6">
+                      {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
+                        const rad = (deg * Math.PI) / 180;
+                        const bx = 552 + Math.cos(rad) * 129;
+                        const by = 495 + Math.sin(rad) * 172;
+                        return (
+                          <g key={deg} transform={`translate(${bx.toFixed(1)} ${by.toFixed(1)})`}>
+                            <circle r="8.5" fill="#70512a" stroke="#1f140a" strokeWidth="1.5" />
+                            <circle r="5" fill="#e5bd73" stroke="#2c1d0e" strokeWidth="1.2" />
+                            <path d="M -3 0 L 3 0 M 0 -3 L 0 3" stroke="#2c1d0e" strokeWidth="1.5" />
+                          </g>
+                        );
+                      })}
+                    </g>
+                    {/* Pressurized copper manifold pipes */}
+                    <path d="M 462 346 L 496 446 M 624 346 L 600 462 M 478 625 L 535 555 M 628 620 L 580 555" stroke="#92400e" strokeWidth="13" strokeLinecap="round" opacity="0.82" />
+                    <path d="M 462 346 L 496 446 M 624 346 L 600 462 M 478 625 L 535 555 M 628 620 L 580 555" stroke="#f59e0b" strokeWidth="3.5" strokeLinecap="round" opacity="0.5" />
+                    <circle cx="552" cy="495" r="84" fill="url(#gl-core)" />
+                    <g id="core-gear-a" transform="translate(494 456)">
+                      <path
+                        d="M -42 -8 L -52 -6 L -52 6 L -42 8 L -38 22 L -46 30 L -38 38 L -28 32 L -14 40 L -16 50 L -4 52 L 0 42 L 16 40 L 24 48 L 34 42 L 28 32 L 38 18 L 48 20 L 52 8 L 42 4 L 42 -10 L 50 -16 L 44 -26 L 34 -22 L 22 -34 L 26 -44 L 16 -50 L 8 -40 L -8 -40 L -16 -50 L -26 -44 L -22 -34 L -34 -22 L -44 -26 L -50 -16 Z"
+                        fill="#d97706"
+                        stroke="#2a1d10"
+                        strokeWidth="2.8"
+                      />
+                      <circle r="24" fill="#3a1604" stroke="#fcd34d" strokeWidth="2.8" />
+                      <path d="M -20 0 H 20 M 0 -20 V 20" stroke="#b45309" strokeWidth="6" />
+                      <circle r="10" fill="#fbbf24" stroke="#2a1d10" strokeWidth="2" />
+                    </g>
+                    <g id="core-gear-b" transform="translate(602 522)">
+                      <path
+                        d="M -34 -6 L -42 -4 L -42 6 L -34 8 L -30 18 L -36 25 L -29 32 L -21 26 L -10 32 L -12 40 L -2 42 L 2 34 L 14 32 L 20 39 L 28 33 L 23 25 L 31 14 L 39 16 L 42 6 L 34 3 L 34 -8 L 40 -13 L 35 -21 L 27 -18 L 18 -27 L 21 -35 L 13 -40 L 6 -32 L -6 -32 L -13 -40 L -21 -35 L -18 -27 L -27 -18 L -35 -21 L -40 -13 Z"
+                        fill="#f59e0b"
+                        stroke="#2a1d10"
+                        strokeWidth="2.6"
+                      />
+                      <circle r="18" fill="#3a1604" stroke="#fef08a" strokeWidth="2.2" />
+                      <path d="M -15 0 H 15 M 0 -15 V 15" stroke="#d97706" strokeWidth="4.5" />
+                      <circle r="7.5" fill="#fde047" stroke="#2a1d10" strokeWidth="1.6" />
+                    </g>
+                    <g id="core-gear-c" transform="translate(534 576)">
+                      <path
+                        d="M -24 -5 L -31 -3 L -31 5 L -24 6 L -21 14 L -26 19 L -20 24 L -14 20 L -7 24 L -9 31 L -1 32 L 2 25 L 10 24 L 15 29 L 21 24 L 17 18 L 23 10 L 30 11 L 32 4 L 25 2 L 25 -6 L 30 -10 L 26 -16 L 20 -13 L 13 -21 L 16 -27 L 9 -31 L 4 -24 L -5 -24 L -10 -31 L -16 -27 L -13 -21 L -20 -13 L -26 -16 L -30 -10 Z"
+                        fill="#94a3b8"
+                        stroke="#1e293b"
+                        strokeWidth="2.2"
+                      />
+                      <circle r="13" fill="#1e293b" stroke="#e2e8f0" strokeWidth="2" />
+                      <circle r="5.5" fill="#cbd5e1" />
+                    </g>
+                    <circle cx="552" cy="495" r="24" fill="#fef08a" stroke="#f59e0b" strokeWidth="4" opacity="0.92" />
+                  </g>
 
                   <g id="torso-main">
-                    <path
-                      d="M 358.0 725.0 C 430.0 755.0 575.0 745.0 680.0 692.0 C 738.0 662.0 780.0 628.0 798.0 598.0 C 806.0 625.0 798.0 662.0 768.0 696.0 C 712.0 758.0 608.0 796.0 496.0 794.0 C 418.0 792.0 368.0 765.0 358.0 725.0 Z"
-                      data-o="M 358.0 725.0 C 430.0 755.0 575.0 745.0 680.0 692.0 C 738.0 662.0 780.0 628.0 798.0 598.0 C 806.0 625.0 798.0 662.0 768.0 696.0 C 712.0 758.0 608.0 796.0 496.0 794.0 C 418.0 792.0 368.0 765.0 358.0 725.0 Z"
-                      fill="url(#pelvis-under-grad)"
-                      filter="url(#metal-patina)"
-                      stroke="#3d311d"
-                      strokeWidth="1.5"
-                    />
-                    <path
-                      d="M 354.0 714.0 C 425.0 746.0 568.0 738.0 678.0 682.0 C 738.0 652.0 780.0 616.0 798.0 584.0 C 801.6 590.9 803.3 598.2 803.0 606.0 C 782.0 642.0 738.0 678.0 676.0 709.0 C 566.0 764.0 424.0 770.0 356.0 736.0 C 353.4 728.8 352.7 721.5 354.0 714.0 Z"
-                      data-o="M 354.0 714.0 C 425.0 746.0 568.0 738.0 678.0 682.0 C 738.0 652.0 780.0 616.0 798.0 584.0 C 801.6 590.9 803.3 598.2 803.0 606.0 C 782.0 642.0 738.0 678.0 676.0 709.0 C 566.0 764.0 424.0 770.0 356.0 736.0 C 353.4 728.8 352.7 721.5 354.0 714.0 Z"
-                      fill="url(#bottom-rim-grad)"
-                      stroke="#41341f"
-                      strokeWidth="1.4"
-                    />
-                    <path
-                      d="M 360 718 C 430 748, 570 740, 678 685 C 736 655, 776 622, 795 591"
-                      data-o="M 360 718 C 430 748, 570 740, 678 685 C 736 655, 776 622, 795 591"
-                      fill="none"
-                      stroke="#927341"
-                      strokeWidth="2.2"
-                      opacity="0.11"
-                    />
-
-                    <g clipPath="url(#clip-lower-belly)">
-                      <rect x="150" y="400" width="800" height="600" fill="url(#copper-belly-grad)" filter="url(#copper-texture)" />
+                    <g id="torso-pelvis-wrap">
                       <path
-                        d="M 352.0 715.0 C 408.0 698.0 472.0 645.0 540.0 586.0 C 612.0 524.0 696.0 490.0 778.0 494.0 C 783.0 503.4 785.4 513.4 785.0 524.0 C 702.0 520.0 622.0 554.0 550.0 614.0 C 482.0 672.0 418.0 722.0 362.0 738.0 C 356.6 731.2 353.3 723.6 352.0 715.0 Z"
-                        data-o="M 352.0 715.0 C 408.0 698.0 472.0 645.0 540.0 586.0 C 612.0 524.0 696.0 490.0 778.0 494.0 C 783.0 503.4 785.4 513.4 785.0 524.0 C 702.0 520.0 622.0 554.0 550.0 614.0 C 482.0 672.0 418.0 722.0 362.0 738.0 C 356.6 731.2 353.3 723.6 352.0 715.0 Z"
-                        fill="#2b2214"
-                        opacity="0.58"
+                        d="M 358.0 725.0 C 430.0 755.0 575.0 745.0 680.0 692.0 C 738.0 662.0 780.0 628.0 798.0 598.0 C 806.0 625.0 798.0 662.0 768.0 696.0 C 712.0 758.0 608.0 796.0 496.0 794.0 C 418.0 792.0 368.0 765.0 358.0 725.0 Z"
+                        data-o="M 358.0 725.0 C 430.0 755.0 575.0 745.0 680.0 692.0 C 738.0 662.0 780.0 628.0 798.0 598.0 C 806.0 625.0 798.0 662.0 768.0 696.0 C 712.0 758.0 608.0 796.0 496.0 794.0 C 418.0 792.0 368.0 765.0 358.0 725.0 Z"
+                        fill="url(#pelvis-under-grad)"
+                        filter="url(#metal-patina)"
+                        stroke="#3d311d"
+                        strokeWidth="1.5"
                       />
-                      <ellipse data-e="595 635 95 52 -24" cx="595" cy="635" rx="95" ry="52" transform="rotate(-24 595 635)" fill="#7e663f" opacity="0.22" />
-                    </g>
-
-                    {/* ENGRAVED TATTOO ART (belly) */}
-                    <g clipPath="url(#clip-lower-belly)" style={{ pointerEvents: 'none' }}>
-                      <use href="#tat-belly" stroke="#f1dca6" strokeWidth="1.6" opacity="0.38" transform="translate(0.9 1)" />
-                      <use href="#tat-belly" stroke="#2b1d0e" strokeWidth="1.6" opacity="0.72" />
-                    </g>
-
-                    <g clipPath="url(#clip-upper-torso)">
-                      <rect x="150" y="150" width="800" height="800" fill="url(#brass-body-main)" filter="url(#metal-patina)" />
-                      <rect x="150" y="150" width="800" height="800" fill="url(#brass-body-vertical)" />
-                      <ellipse data-e="445 435 115 165 -18" cx="445" cy="435" rx="115" ry="165" transform="rotate(-18 445 435)" fill="#a5824a" opacity="0.04" />
                       <path
-                        d="M 650 220 C 705 305, 745 400, 772 492"
-                        data-o="M 650 220 C 705 305, 745 400, 772 492"
+                        d="M 354.0 714.0 C 425.0 746.0 568.0 738.0 678.0 682.0 C 738.0 652.0 780.0 616.0 798.0 584.0 C 801.6 590.9 803.3 598.2 803.0 606.0 C 782.0 642.0 738.0 678.0 676.0 709.0 C 566.0 764.0 424.0 770.0 356.0 736.0 C 353.4 728.8 352.7 721.5 354.0 714.0 Z"
+                        data-o="M 354.0 714.0 C 425.0 746.0 568.0 738.0 678.0 682.0 C 738.0 652.0 780.0 616.0 798.0 584.0 C 801.6 590.9 803.3 598.2 803.0 606.0 C 782.0 642.0 738.0 678.0 676.0 709.0 C 566.0 764.0 424.0 770.0 356.0 736.0 C 353.4 728.8 352.7 721.5 354.0 714.0 Z"
+                        fill="url(#bottom-rim-grad)"
+                        stroke="#41341f"
+                        strokeWidth="1.4"
+                      />
+                      <path
+                        d="M 360 718 C 430 748, 570 740, 678 685 C 736 655, 776 622, 795 591"
+                        data-o="M 360 718 C 430 748, 570 740, 678 685 C 736 655, 776 622, 795 591"
                         fill="none"
-                        stroke="#967643"
-                        strokeWidth="10"
-                        opacity="0.04"
+                        stroke="#927341"
+                        strokeWidth="2.2"
+                        opacity="0.11"
                       />
                     </g>
 
-                    {/* ENGRAVED TATTOO ART (chest) */}
-                    <g clipPath="url(#clip-upper-torso)" style={{ pointerEvents: 'none' }}>
-                      <use href="#tat-chest" stroke="#f1dca6" strokeWidth="1.6" opacity="0.38" transform="translate(0.9 1)" />
-                      <use href="#tat-chest" stroke="#2b1d0e" strokeWidth="1.6" opacity="0.72" />
+                    <g id="torso-belly-wrap">
+                      <g clipPath="url(#clip-lower-belly)">
+                        <rect x="150" y="400" width="800" height="600" fill="url(#copper-belly-grad)" filter="url(#copper-texture)" />
+                        <path
+                          d="M 352.0 715.0 C 408.0 698.0 472.0 645.0 540.0 586.0 C 612.0 524.0 696.0 490.0 778.0 494.0 C 783.0 503.4 785.4 513.4 785.0 524.0 C 702.0 520.0 622.0 554.0 550.0 614.0 C 482.0 672.0 418.0 722.0 362.0 738.0 C 356.6 731.2 353.3 723.6 352.0 715.0 Z"
+                          data-o="M 352.0 715.0 C 408.0 698.0 472.0 645.0 540.0 586.0 C 612.0 524.0 696.0 490.0 778.0 494.0 C 783.0 503.4 785.4 513.4 785.0 524.0 C 702.0 520.0 622.0 554.0 550.0 614.0 C 482.0 672.0 418.0 722.0 362.0 738.0 C 356.6 731.2 353.3 723.6 352.0 715.0 Z"
+                          fill="#2b2214"
+                          opacity="0.58"
+                        />
+                        <ellipse data-e="595 635 95 52 -24" cx="595" cy="635" rx="95" ry="52" transform="rotate(-24 595 635)" fill="#7e663f" opacity="0.22" />
+                      </g>
+
+                      {/* ENGRAVED TATTOO ART (belly) */}
+                      <g clipPath="url(#clip-lower-belly)" style={{ pointerEvents: 'none' }}>
+                        <use href="#tat-belly" stroke="#f1dca6" strokeWidth="1.6" opacity="0.38" transform="translate(0.9 1)" />
+                        <use href="#tat-belly" stroke="#2b1d0e" strokeWidth="1.6" opacity="0.72" />
+                      </g>
+
+                      <path
+                        d="M 352.0 712.0 C 406.0 694.0 468.0 644.0 536.0 585.0 C 608.0 522.0 694.0 488.0 775.0 492.0 C 778.1 496.9 779.8 502.2 780.0 508.0 C 698.0 504.0 614.0 538.0 542.0 600.0 C 474.0 658.0 412.0 708.0 358.0 725.0 C 354.8 721.2 352.8 716.9 352.0 712.0 Z"
+                        data-o="M 352.0 712.0 C 406.0 694.0 468.0 644.0 536.0 585.0 C 608.0 522.0 694.0 488.0 775.0 492.0 C 778.1 496.9 779.8 502.2 780.0 508.0 C 698.0 504.0 614.0 538.0 542.0 600.0 C 474.0 658.0 412.0 708.0 358.0 725.0 C 354.8 721.2 352.8 716.9 352.0 712.0 Z"
+                        fill="#645237"
+                        stroke="#342b1c"
+                        strokeWidth="1.5"
+                      />
+                      <path
+                        d="M 356 713 C 410 695, 472 645, 540 586 C 612 524, 696 490, 775 494"
+                        data-o="M 356 713 C 410 695, 472 645, 540 586 C 612 524, 696 490, 775 494"
+                        fill="none"
+                        stroke="#866e46"
+                        strokeWidth="2.5"
+                        opacity="0.12"
+                      />
                     </g>
 
+                    <g id="torso-chest-wrap">
+                      <g clipPath="url(#clip-upper-torso)">
+                        <rect x="150" y="150" width="800" height="800" fill="url(#brass-body-main)" filter="url(#metal-patina)" />
+                        <rect x="150" y="150" width="800" height="800" fill="url(#brass-body-vertical)" />
+                        <ellipse data-e="445 435 115 165 -18" cx="445" cy="435" rx="115" ry="165" transform="rotate(-18 445 435)" fill="#a5824a" opacity="0.04" />
+                        <path
+                          d="M 650 220 C 705 305, 745 400, 772 492"
+                          data-o="M 650 220 C 705 305, 745 400, 772 492"
+                          fill="none"
+                          stroke="#967643"
+                          strokeWidth="10"
+                          opacity="0.04"
+                        />
+                      </g>
+
+                      {/* ENGRAVED TATTOO ART (chest) */}
+                      <g clipPath="url(#clip-upper-torso)" style={{ pointerEvents: 'none' }}>
+                        <use href="#tat-chest" stroke="#f1dca6" strokeWidth="1.6" opacity="0.38" transform="translate(0.9 1)" />
+                        <use href="#tat-chest" stroke="#2b1d0e" strokeWidth="1.6" opacity="0.72" />
+                      </g>
+                    </g>
+                  </g>
+
+                  {/* Spherical Ball-State Brass Rim & Specular Overlay */}
+                  <g id="ball-shell-overlay" opacity="0" style={{ pointerEvents: 'none' }}>
+                    <circle cx="552" cy="505" r="236" fill="none" stroke="#2f2314" strokeWidth="5" opacity="0.78" />
+                    <circle cx="552" cy="505" r="232" fill="none" stroke="#d8b26e" strokeWidth="3.2" opacity="0.34" />
                     <path
-                      d="M 352.0 712.0 C 406.0 694.0 468.0 644.0 536.0 585.0 C 608.0 522.0 694.0 488.0 775.0 492.0 C 778.1 496.9 779.8 502.2 780.0 508.0 C 698.0 504.0 614.0 538.0 542.0 600.0 C 474.0 658.0 412.0 708.0 358.0 725.0 C 354.8 721.2 352.8 716.9 352.0 712.0 Z"
-                      data-o="M 352.0 712.0 C 406.0 694.0 468.0 644.0 536.0 585.0 C 608.0 522.0 694.0 488.0 775.0 492.0 C 778.1 496.9 779.8 502.2 780.0 508.0 C 698.0 504.0 614.0 538.0 542.0 600.0 C 474.0 658.0 412.0 708.0 358.0 725.0 C 354.8 721.2 352.8 716.9 352.0 712.0 Z"
-                      fill="#645237"
-                      stroke="#342b1c"
-                      strokeWidth="1.5"
+                      d="M 380 345 A 220 220 0 0 1 688 326"
+                      fill="none"
+                      stroke="#fff3cf"
+                      strokeWidth="6.5"
+                      strokeLinecap="round"
+                      opacity="0.34"
                     />
                     <path
-                      d="M 356 713 C 410 695, 472 645, 540 586 C 612 524, 696 490, 775 494"
-                      data-o="M 356 713 C 410 695, 472 645, 540 586 C 612 524, 696 490, 775 494"
+                      d="M 332 548 A 226 226 0 0 0 742 622"
                       fill="none"
-                      stroke="#866e46"
-                      strokeWidth="2.5"
-                      opacity="0.12"
+                      stroke="#1f150c"
+                      strokeWidth="11"
+                      strokeLinecap="round"
+                      opacity="0.3"
                     />
                   </g>
 
-                  {/* TOP SCREW: polished-brass Phillips bolt on hex nut and beveled flange */}
+                  {/* TOP SCREW: heavy machined brass Phillips bolt on hex nut, flange & threaded steel shank */}
+                  <g id="top-screw-wrap">
                   <g id="top-screw" transform="translate(478 186) rotate(-14) scale(1.7)">
                     <ellipse cx="3" cy="8" rx="40" ry="11" fill="#1f140a" opacity="0.38" filter="url(#soft-shadow)" />
+                    <g id="top-screw-shank" opacity="0">
+                      <path d="M -11 6 L -11 32 L 0 38 L 11 32 L 11 6 Z" fill="url(#ts-cyl)" stroke="#23160a" strokeWidth="1.2" />
+                      <g stroke="#23160a" strokeWidth="1.15" opacity="0.85">
+                        <path d="M -11 10 L 11 13" />
+                        <path d="M -11 15.5 L 11 18.5" />
+                        <path d="M -11 21 L 11 24" />
+                        <path d="M -11 26.5 L 11 29.5" />
+                      </g>
+                    </g>
                     <ellipse cx="0" cy="6" rx="34" ry="10" fill="#2c1d0e" />
                     <path d="M -34 3 L -34 6 A 34 10 0 0 0 34 6 L 34 3 Z" fill="#4a331b" />
-                    <ellipse cx="0" cy="3" rx="34" ry="10" fill="url(#ts-flange)" stroke="#2c1d0e" strokeWidth="1.2" />
-                    <ellipse cx="0" cy="3" rx="29" ry="7.8" fill="none" stroke="#d9b172" strokeWidth="1" opacity="0.5" />
-                    <g fill="#e3bd7e" stroke="#2c1d0e" strokeWidth="0.6">
-                      <circle cx="-26" cy="4" r="1.6" />
-                      <circle cx="26" cy="4" r="1.6" />
-                      <circle cx="-14" cy="10" r="1.5" />
-                      <circle cx="14" cy="10" r="1.5" />
+                    <ellipse cx="0" cy="3" rx="34" ry="10" fill="url(#ts-flange)" stroke="#2c1d0e" strokeWidth="1.3" />
+                    <ellipse cx="0" cy="3" rx="29" ry="7.8" fill="none" stroke="#d9b172" strokeWidth="1" opacity="0.55" />
+                    <g fill="#e3bd7e" stroke="#2c1d0e" strokeWidth="0.7">
+                      <circle cx="-26" cy="4" r="2.0" />
+                      <circle cx="26" cy="4" r="2.0" />
+                      <circle cx="-14" cy="10" r="1.9" />
+                      <circle cx="14" cy="10" r="1.9" />
+                      <circle cx="-22" cy="-2" r="1.7" />
+                      <circle cx="22" cy="-2" r="1.7" />
                     </g>
-                    <path d="M -24 -12 L -12 -5 L -12 4 L -24 -3 Z" fill="url(#ts-nutL)" stroke="#2c1d0e" strokeWidth="0.9" />
-                    <path d="M -12 -5 L 12 -5 L 12 4 L -12 4 Z" fill="url(#ts-nutM)" stroke="#2c1d0e" strokeWidth="0.9" />
-                    <path d="M 12 -5 L 24 -12 L 24 -3 L 12 4 Z" fill="url(#ts-nutR)" stroke="#2c1d0e" strokeWidth="0.9" />
-                    <path d="M -24 -12 L -12 -19 L 12 -19 L 24 -12 L 12 -5 L -12 -5 Z" fill="#c79a5c" stroke="#2c1d0e" strokeWidth="0.9" />
-                    <path d="M -22 -12 L -11 -18 L 11 -18" fill="none" stroke="#fff1c9" strokeWidth="1" opacity="0.6" />
+                    <path d="M -24 -12 L -12 -5 L -12 4 L -24 -3 Z" fill="url(#ts-nutL)" stroke="#2c1d0e" strokeWidth="1" />
+                    <path d="M -12 -5 L 12 -5 L 12 4 L -12 4 Z" fill="url(#ts-nutM)" stroke="#2c1d0e" strokeWidth="1" />
+                    <path d="M 12 -5 L 24 -12 L 24 -3 L 12 4 Z" fill="url(#ts-nutR)" stroke="#2c1d0e" strokeWidth="1" />
+                    <path d="M -24 -12 L -12 -19 L 12 -19 L 24 -12 L 12 -5 L -12 -5 Z" fill="#c79a5c" stroke="#2c1d0e" strokeWidth="1" />
+                    <path d="M -22 -12 L -11 -18 L 11 -18" fill="none" stroke="#fff1c9" strokeWidth="1.2" opacity="0.65" />
                     <path d="M -17 -15 L -17 -30 A 17 6.5 0 0 1 17 -30 L 17 -15 A 17 6.5 0 0 1 -17 -15 Z" fill="url(#ts-cyl)" stroke="#2c1d0e" strokeWidth="1.2" />
-                    <g stroke="#2c1d0e" strokeWidth="0.7" opacity="0.4">
+                    <g stroke="#2c1d0e" strokeWidth="0.7" opacity="0.45">
                       <path d="M -13 -14 L -13 -28" />
                       <path d="M -9 -12 L -9 -27" />
                       <path d="M -4.5 -11 L -4.5 -26.5" />
@@ -4701,12 +7909,13 @@ export function PiggyDuelPlugin({
                       <path d="M 9 -12 L 9 -27" />
                       <path d="M 13 -14 L 13 -28" />
                     </g>
-                    <ellipse cx="0" cy="-30" rx="17" ry="6.5" fill="url(#ts-top)" stroke="#3a2813" strokeWidth="1.1" />
-                    <ellipse cx="0" cy="-30" rx="13.5" ry="4.9" fill="none" stroke="#fff3cf" strokeWidth="0.8" opacity="0.45" />
-                    <path d="M -9 -30 L 9 -30 M 0 -34.2 L 0 -25.8" stroke="#1b1108" strokeWidth="3.4" strokeLinecap="round" />
+                    <ellipse cx="0" cy="-30" rx="17" ry="6.5" fill="url(#ts-top)" stroke="#3a2813" strokeWidth="1.2" />
+                    <ellipse cx="0" cy="-30" rx="13.5" ry="4.9" fill="none" stroke="#fff3cf" strokeWidth="0.9" opacity="0.5" />
+                    <path d="M -9 -30 L 9 -30 M 0 -34.2 L 0 -25.8" stroke="#1b1108" strokeWidth="3.6" strokeLinecap="round" />
                     <path d="M -8 -29.2 L 8 -29.2 M 0.9 -33.2 L 0.9 -26.8" stroke="#8b6338" strokeWidth="0.9" strokeLinecap="round" opacity="0.7" />
-                    <ellipse cx="-7" cy="-33.2" rx="4.2" ry="1.3" fill="#ffffff" opacity="0.5" transform="rotate(-12 -7 -33.2)" />
-                    <path d="M -11 -26 L -11 -17" stroke="#fff3cf" strokeWidth="1.4" opacity="0.4" strokeLinecap="round" />
+                    <ellipse cx="-7" cy="-33.2" rx="4.2" ry="1.3" fill="#ffffff" opacity="0.55" transform="rotate(-12 -7 -33.2)" />
+                    <path d="M -11 -26 L -11 -17" stroke="#fff3cf" strokeWidth="1.4" opacity="0.45" strokeLinecap="round" />
+                  </g>
                   </g>
 
                   <g id="head-and-ears">
@@ -4719,6 +7928,7 @@ export function PiggyDuelPlugin({
                     d="M 294.0 334.0 C 332.0 346.0 362.0 374.0 374.0 414.0 C 374.0 452.0 354.0 484.0 326.0 496.0 C 295.0 456.0 282.0 394.0 294.0 334.0 Z"
                     fill="#1a1108"
                   />
+                  <g id="left-arm-tuck">
                   <g id="left-arm-group">
                     <path
                       d="M 244.0 352.0 C 262.0 336.0 282.0 328.0 298.0 332.0 C 332.0 346.0 356.0 382.0 356.0 422.0 C 338.0 428.0 320.0 430.0 304.0 428.0 C 292.0 396.0 270.0 368.0 244.0 352.0 Z"
@@ -4769,7 +7979,9 @@ export function PiggyDuelPlugin({
                       <ellipse cx="174" cy="496" rx="22" ry="15" transform="rotate(-38 174 496)" fill="#5e786b" opacity="0.04" />
                     </g>
                   </g>
+                  </g>
 
+                  <g id="slot-eject-wrap">
                   <g id="slot-follow">
                     <g id="coin-slot-assembly" transform="translate(-28 75) translate(575 372) scale(1.45) translate(-575 -372)">
                       <path
@@ -4925,6 +8137,7 @@ export function PiggyDuelPlugin({
                       </g>
                     </g>
                   </g>
+                  </g>
 
                   {/* PAULDRON ARMOUR over the arm AND over the slot frame */}
                   <g id="left-pauldron">
@@ -4941,6 +8154,13 @@ export function PiggyDuelPlugin({
                       strokeWidth="1.6"
                     />
                     <path d="M 254 309 C 282 286, 310 270, 336 261" fill="none" stroke="#926344" strokeWidth="2.2" opacity="0.11" />
+                    {/* Machined pauldron anchor screws */}
+                    <g fill="url(#ts-top)" stroke="#2c1d0e" strokeWidth="1.2">
+                      <circle cx="292" cy="308" r="5.5" />
+                      <circle cx="388" cy="296" r="5.5" />
+                      <circle cx="364" cy="358" r="5.5" />
+                      <path d="M 289 308 H 295 M 385 296 H 391 M 361 358 H 367" stroke="#2c1d0e" strokeWidth="1.3" />
+                    </g>
                     <g transform="translate(345 325) rotate(-10) scale(1.15)" style={{ pointerEvents: 'none' }}>
                       <use href="#tat-dollar" stroke="#f1dca6" strokeWidth="1.7" opacity="0.4" transform="translate(0.9 1)" />
                       <use href="#tat-dollar" stroke="#2b1d0e" strokeWidth="1.7" opacity="0.75" />
@@ -4962,6 +8182,11 @@ export function PiggyDuelPlugin({
                         opacity="0.55"
                       />
                       <path d="M 530 174 C 562 204, 588 238, 605 274" fill="none" stroke="#8d6042" strokeWidth="2" opacity="0.10" />
+                      <g fill="url(#ts-top)" stroke="#2c1d0e" strokeWidth="1.1">
+                        <circle cx="566" cy="184" r="4.8" />
+                        <circle cx="628" cy="242" r="4.8" />
+                        <path d="M 563.5 184 H 568.5 M 625.5 242 H 630.5" stroke="#2c1d0e" strokeWidth="1.2" />
+                      </g>
                       <g transform="translate(612 205) rotate(28) scale(1.0)" style={{ pointerEvents: 'none' }}>
                         <use href="#tat-dollar" stroke="#f1dca6" strokeWidth="1.7" opacity="0.4" transform="translate(0.9 1)" />
                         <use href="#tat-dollar" stroke="#2b1d0e" strokeWidth="1.7" opacity="0.75" />
@@ -4969,6 +8194,7 @@ export function PiggyDuelPlugin({
                     </g>
                   </g>
 
+                  <g id="jet-tuck-wrap">
                   <g id="jet-follow">
                     <g id="jet-gimbal" transform="translate(742 672) rotate(40) scale(1.4)">
                       <g id="jet-flame" opacity="0">
@@ -4988,7 +8214,9 @@ export function PiggyDuelPlugin({
                       <ellipse id="jet-ember" cx="33" cy="0" rx="2.6" ry="12" fill="#e8a24a" opacity="0" />
                     </g>
                   </g>
+                  </g>
 
+                  <g id="tail-eject-wrap">
                   <g id="tail-mount">
                     <g id="curly-tail-group">
                       <path
@@ -5042,6 +8270,7 @@ export function PiggyDuelPlugin({
                       <path d="M 724 668 C 718 659, 718 648, 724 640" fill="none" stroke="#324039" strokeWidth="8" strokeLinecap="round" />
                       <path d="M 724 668 C 718 659, 718 648, 724 640" fill="none" stroke="#5a7366" strokeWidth="5" strokeLinecap="round" />
                     </g>
+                  </g>
                   </g>
                 </g>
               </g>
@@ -5122,7 +8351,7 @@ export function PiggyDuelPlugin({
               </div>
 
               <p className="mt-2.5 text-sm text-[#5A4A38] leading-relaxed">
-                The piggy darts between pattern spots while your sling laser sweeps in a playful arc. Predict its stop, line up your spot, and sync your throw when the laser locks green on the slot!
+                Drop <strong>3 coins in a row</strong> into the chest slot without missing or letting the pressure vent — keep the piggy pumped and it explodes!
               </p>
 
               <div className="mt-5">
@@ -5151,21 +8380,21 @@ export function PiggyDuelPlugin({
 
               <div className="mt-5 pt-4 border-t border-[#231A10]/10 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-[#473827]">
                 <div>
-                  <span className="font-semibold text-[#231A10]">Watch Spots</span> · Read Pattern
+                  <span className="font-semibold text-[#231A10]">Quick Tap</span> · Short Hop &amp; Snap
                 </div>
                 <div>
-                  <span className="font-semibold text-[#231A10]">Sync Laser</span> · 6-Shot Cylinder
+                  <span className="font-semibold text-[#231A10]">Hold + Release</span> · Charge &amp; Glide
                 </div>
                 <div>
                   <span className="font-semibold text-[#231A10]">R / Empty</span> · Orbit Reload
                 </div>
                 <div>
-                  <span className="font-semibold text-[#231A10]">Right Click / Space</span> · Dash
+                  <span className="font-semibold text-[#231A10]">Space (Hold)</span> · Dash / Glide
                 </div>
               </div>
 
               <div className="mt-4 pt-3 border-t border-[#231A10]/10 flex items-center justify-between text-xs text-[#5A4A38]">
-                <span>Direct slot drops fill · Armor grazes deflect</span>
+                <span>3 slot drops in a row breaks · Misses vent pressure</span>
                 <span className="font-mono-tabular font-semibold text-[#15803D]">Best: ${hud.bestScore.toLocaleString()}</span>
               </div>
 
@@ -5177,7 +8406,7 @@ export function PiggyDuelPlugin({
                 Start Filling
               </button>
               <p className="mt-2.5 text-center text-[11px] text-[#6B5A46]">
-                Tip: Aim the sweeping laser onto the slot! Each 6-coin cylinder sweeps the hand orbit threshold to reload.
+                Tip: Keep it pumped! Land 3 synced slot drops before the hold bar vents or a coin misses.
               </p>
             </div>
           </div>
@@ -5468,7 +8697,19 @@ export function PiggyDuelPlugin({
       {/* BOTTOM BAR */}
       <footer className="relative z-30 shrink-0 px-4 py-2 bg-[#FFFDF9]/95 border-t border-[#231A10]/10 flex items-center justify-between gap-3 text-xs text-[#5A4A38]">
         <div className="flex items-center gap-3">
-          <span className="font-semibold text-[#231A10]">{hud.bossActionLabel}</span>
+          <span className={`font-semibold ${hud.isNervous ? 'text-[#DC2626]' : 'text-[#231A10]'}`}>
+            {hud.bossActionLabel}
+          </span>
+          {hud.isNervous && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#DC2626]/12 text-[#DC2626] border border-[#DC2626]/25 font-mono-tabular text-[11px] font-bold">
+              NERVOUS {hud.nervousPct}%
+            </span>
+          )}
+          {hud.handStateLabel && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#0284C7]/12 text-[#0369A1] border border-[#0284C7]/25 font-mono-tabular text-[11px] font-bold">
+              {hud.handStateLabel}
+            </span>
+          )}
           {hud.combo > 1 && (
             <>
               <span aria-hidden="true">·</span>
@@ -5478,25 +8719,31 @@ export function PiggyDuelPlugin({
         </div>
 
         <div className="hidden md:flex items-center gap-3">
-          <span>Predict Spot</span>
+          <span>Tap · Hop</span>
           <span aria-hidden="true">·</span>
-          <span>Sync Laser + Click / J · Fire ({hud.revolverChambers}/{hud.revolverMax})</span>
+          <span>Hold / Release · Charge &amp; Glide ({hud.revolverChambers}/{hud.revolverMax})</span>
           <span aria-hidden="true">·</span>
           <span>Q · Laser ({hud.laserLabel})</span>
           <span aria-hidden="true">·</span>
           <span>R · Reload</span>
           <span aria-hidden="true">·</span>
-          <span>Space · Dash</span>
+          <span>Space · Dash / Glide</span>
         </div>
 
         <div className="flex items-center gap-2 md:hidden">
           <button
             type="button"
-            onPointerDown={() => throwCoin(false)}
+            onPointerDown={startHandPress}
+            onPointerUp={releaseHandPress}
+            onPointerCancel={releaseHandPress}
             className="h-10 px-3.5 rounded-xl bg-[#B45309] text-white font-semibold inline-flex items-center gap-1.5 touch-none"
           >
             <IconCoins className="w-3.5 h-3.5" />
-            {hud.isReloading ? `${hud.reloadPct}%` : `Drop (${hud.revolverChambers})`}
+            {hud.isReloading
+              ? `${hud.reloadPct}%`
+              : hud.handChargePct > 0
+              ? `${hud.handChargePct}%`
+              : `Tap/Hold (${hud.revolverChambers})`}
           </button>
           <button
             type="button"
@@ -5508,7 +8755,13 @@ export function PiggyDuelPlugin({
           </button>
           <button
             type="button"
-            onPointerDown={performDash}
+            onPointerDown={() => performDash(true)}
+            onPointerUp={() => {
+              simRef.current.dashHolding = false;
+            }}
+            onPointerCancel={() => {
+              simRef.current.dashHolding = false;
+            }}
             className="h-10 px-3.5 rounded-xl bg-[#EFE9DD] text-[#231A10] font-semibold inline-flex items-center gap-1.5 touch-none"
           >
             <IconZap className="w-3.5 h-3.5" />
