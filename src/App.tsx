@@ -121,7 +121,7 @@ const PLUGIN_SCOPED_CSS = `
     filter: none !important;
   }
 `;
-type BossAction = 'WALK' | 'PATTERN_MOVE' | 'PATTERN_STOP' | 'JET_FLIGHT' | 'BOUNCY_BALL' | 'BREAKING';
+type BossAction = 'WALK' | 'PATTERN_MOVE' | 'PATTERN_STOP' | 'JET_FLIGHT' | 'BOUNCY_BALL' | 'DOLLAR_BARRAGE' | 'INTRO_TRANSFORM' | 'BREAKING';
 export type LaserStyleId = 'SLING_ARC' | 'RAPID_WHIP' | 'HIGH_LOB' | 'STRAIGHT_RAIL' | 'SNIPER_LOCK';
 export type LaserModeSetting = 'AUTO' | LaserStyleId;
 
@@ -324,10 +324,28 @@ interface Projectile {
   gravity: number;
   bounces?: number;
   armorHitCooldown?: number;
-  trail?: { x: number; y: number }[];
+  trail?: { x: number; y: number; bounce?: boolean }[];
   power?: number;
   pumpValue?: number;
   missedHandled?: boolean;
+  superBounce?: boolean;
+  uziShot?: boolean;
+}
+
+type CollectibleKind = 'BOUNCE' | 'UZZI';
+
+interface ArenaCollectible {
+  id: number;
+  kind: CollectibleKind;
+  x: number;
+  y: number;
+  baseY: number;
+  vx: number;
+  bobPhase: number;
+  spin: number;
+  life: number;
+  maxLife: number;
+  r: number;
 }
 
 interface CanvasParticle {
@@ -363,6 +381,37 @@ interface Afterimage {
   y: number;
   life: number;
   maxLife: number;
+  ang?: number;
+  speed?: number;
+  isDash?: boolean;
+}
+
+interface HandTrailPoint {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  isDash: boolean;
+  speed: number;
+}
+
+interface ThrownDollar {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  w: number;
+  h: number;
+  rot: number;
+  vrot: number;
+  flutterPhase: number;
+  flutterFreq: number;
+  swayPhase: number;
+  life: number;
+  maxLife: number;
+  kind: 'emerald_bill' | 'gold_note';
+  trail: { x: number; y: number }[];
+  intercepted?: boolean;
 }
 
 interface DualTrailPoint {
@@ -427,6 +476,33 @@ interface DroppingCoin {
   life: number;
   maxLife: number;
   dir: number;
+}
+
+interface SwallowedCoinRecord {
+  r: number;
+  power: number;
+}
+
+interface SpilledCoin {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  r: number;
+  rot: number;
+  vrot: number;
+  flipPhase: number;
+  flipSpeed: number;
+  power: number;
+  isPlayerStored: boolean;
+  delay: number;
+  wave: number;
+  life: number;
+  maxLife: number;
+  bounces: number;
+  gravity: number;
+  trail: Array<{ x: number; y: number }>;
+  glintPhase: number;
 }
 
 interface SlotIntakePulse {
@@ -513,6 +589,10 @@ interface HudState {
   isNervous: boolean;
   handChargePct: number;
   handStateLabel: string;
+  bounceBuffSec: number;
+  bounceBuffPct: number;
+  uzziBuffSec: number;
+  uzziBuffPct: number;
 }
 
 const HAND_SPRITE_URL = 'https://i.imgur.com/SXUGSfK.png';
@@ -636,6 +716,180 @@ class FightSynth {
     osc.connect(gain).connect(ctx.destination);
     osc.start(now);
     osc.stop(now + 0.11);
+  }
+
+  public playDollarBarrageStart() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    // Heavy brass vault latch slam
+    const latch = ctx.createOscillator();
+    const latchGain = ctx.createGain();
+    latch.type = 'triangle';
+    latch.frequency.setValueAtTime(175, now);
+    latch.frequency.exponentialRampToValueAtTime(52, now + 0.22);
+    latchGain.gain.setValueAtTime(0.18, now);
+    latchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    latch.connect(latchGain).connect(ctx.destination);
+    latch.start(now);
+    latch.stop(now + 0.25);
+
+    // Rising luxury emerald-gold chord shimmer
+    [440, 554.37, 659.25, 880].forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, now + 0.04 + idx * 0.045);
+      gain.gain.setValueAtTime(0.075, now + 0.04 + idx * 0.045);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04 + idx * 0.045 + 0.32);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + 0.04 + idx * 0.045);
+      osc.stop(now + 0.04 + idx * 0.045 + 0.34);
+    });
+  }
+
+  public playDollarThrow(isGold = false) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(isGold ? 960 : 720, now);
+    osc.frequency.exponentialRampToValueAtTime(isGold ? 440 : 320, now + 0.075);
+    gain.gain.setValueAtTime(0.055, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.085);
+  }
+
+  public playVaultDeflect() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [680, 1020].forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, now + idx * 0.015);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.58, now + 0.14);
+      gain.gain.setValueAtTime(0.095, now + idx * 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + idx * 0.015);
+      osc.stop(now + 0.16);
+    });
+  }
+
+  public playDollarSwat(isGold = false) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const freqs = isGold ? [1046.5, 1318.5, 1567.98] : [880, 1174.66];
+    freqs.forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, now + i * 0.024);
+      gain.gain.setValueAtTime(0.065, now + i * 0.024);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.024 + 0.14);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + i * 0.024);
+      osc.stop(now + i * 0.024 + 0.15);
+    });
+  }
+
+  public playIntroAwakenStart() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // Gentle piggybank coin-rattle tink -> rising mechanical boiler hum
+    [1318.5, 1567.98, 1760].forEach((f, idx) => {
+      const tink = ctx.createOscillator();
+      const gain = ctx.createGain();
+      tink.type = 'sine';
+      tink.frequency.setValueAtTime(f, now + idx * 0.09);
+      gain.gain.setValueAtTime(0.06, now + idx * 0.09);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.09 + 0.16);
+      tink.connect(gain).connect(ctx.destination);
+      tink.start(now + idx * 0.09);
+      tink.stop(now + idx * 0.09 + 0.18);
+    });
+
+    const hum = ctx.createOscillator();
+    const humGain = ctx.createGain();
+    hum.type = 'triangle';
+    hum.frequency.setValueAtTime(84, now + 0.06);
+    hum.frequency.exponentialRampToValueAtTime(195, now + 0.62);
+    humGain.gain.setValueAtTime(0.001, now);
+    humGain.gain.linearRampToValueAtTime(0.11, now + 0.28);
+    humGain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+    hum.connect(humGain).connect(ctx.destination);
+    hum.start(now);
+    hum.stop(now + 0.68);
+  }
+
+  public playIntroStomp() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // Heavy hydraulic chassis stomp + brass bolt ratchet
+    const thump = ctx.createOscillator();
+    const tGain = ctx.createGain();
+    thump.type = 'triangle';
+    thump.frequency.setValueAtTime(148, now);
+    thump.frequency.exponentialRampToValueAtTime(42, now + 0.24);
+    tGain.gain.setValueAtTime(0.2, now);
+    tGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+    thump.connect(tGain).connect(ctx.destination);
+    thump.start(now);
+    thump.stop(now + 0.28);
+
+    [440, 660].forEach((f, idx) => {
+      const clack = ctx.createOscillator();
+      const cGain = ctx.createGain();
+      clack.type = 'square';
+      clack.frequency.setValueAtTime(f, now + 0.04 + idx * 0.055);
+      cGain.gain.setValueAtTime(0.05, now + 0.04 + idx * 0.055);
+      cGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12 + idx * 0.055);
+      clack.connect(cGain).connect(ctx.destination);
+      clack.start(now + 0.04 + idx * 0.055);
+      clack.stop(now + 0.14 + idx * 0.055);
+    });
+  }
+
+  public playIntroDeploy() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // Heroic steampunk brass fanfare + jet thruster test ignition
+    [329.63, 440, 554.37, 659.25].forEach((f, idx) => {
+      const horn = ctx.createOscillator();
+      const gain = ctx.createGain();
+      horn.type = 'triangle';
+      horn.frequency.setValueAtTime(f, now + idx * 0.045);
+      gain.gain.setValueAtTime(0.095, now + idx * 0.045);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.045 + 0.42);
+      horn.connect(gain).connect(ctx.destination);
+      horn.start(now + idx * 0.045);
+      horn.stop(now + idx * 0.045 + 0.45);
+    });
+
+    const jet = ctx.createOscillator();
+    const jGain = ctx.createGain();
+    jet.type = 'sawtooth';
+    jet.frequency.setValueAtTime(135, now + 0.05);
+    jet.frequency.exponentialRampToValueAtTime(340, now + 0.28);
+    jet.frequency.exponentialRampToValueAtTime(160, now + 0.48);
+    jGain.gain.setValueAtTime(0.055, now + 0.05);
+    jGain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    jet.connect(jGain).connect(ctx.destination);
+    jet.start(now + 0.05);
+    jet.stop(now + 0.52);
   }
 
   public playClash() {
@@ -1010,6 +1264,26 @@ class FightSynth {
     });
   }
 
+  public playCoinCascadeClink(pitchMul = 1, vol = 0.028) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const f1 = 2140 * pitchMul;
+    const f2 = 3190 * pitchMul;
+    [f1, f2].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = i === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(freq, now + i * 0.012);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.9, now + i * 0.012 + 0.065);
+      gain.gain.setValueAtTime(vol * (i === 0 ? 0.72 : 1), now + i * 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.012 + 0.072);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + i * 0.012);
+      osc.stop(now + i * 0.012 + 0.078);
+    });
+  }
+
   public playBallBoing(pitchMul = 1) {
     const ctx = this.ensure();
     if (!ctx) return;
@@ -1186,6 +1460,109 @@ class FightSynth {
     osc.start(now);
     osc.stop(now + 0.19);
   }
+
+  public playCollectibleSpawn() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [740, 1110].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t0 = now + i * 0.055;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.12, t0 + 0.09);
+      gain.gain.setValueAtTime(0.05, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.14);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.15);
+    });
+  }
+
+  public playBouncePowerPickup() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t0 = now + i * 0.045;
+      osc.type = i % 2 === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.06, t0 + 0.12);
+      gain.gain.setValueAtTime(0.085, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.19);
+    });
+  }
+
+  public playSpringBounce(bounceIdx = 1) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const pitchBoost = Math.min(1.45, 1 + (bounceIdx - 1) * 0.06);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(420 * pitchBoost, now);
+    osc.frequency.exponentialRampToValueAtTime(920 * pitchBoost, now + 0.085);
+    gain.gain.setValueAtTime(0.075, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.12);
+  }
+
+  public playUziPickup() {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    // Crisp metallic slide rack + 3-note ascending SMG cadence
+    [340, 520, 780, 1170].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t0 = now + i * 0.036;
+      osc.type = i < 2 ? 'sawtooth' : 'triangle';
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.18, t0 + 0.08);
+      gain.gain.setValueAtTime(i < 2 ? 0.055 : 0.08, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.13);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.14);
+    });
+  }
+
+  public playUziShot(shotIdx = 0) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const pitchLift = 1 + (shotIdx % 6) * 0.045;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(420 * pitchLift, now);
+    osc.frequency.exponentialRampToValueAtTime(115, now + 0.055);
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.07);
+
+    const snap = ctx.createOscillator();
+    const snapGain = ctx.createGain();
+    snap.type = 'triangle';
+    snap.frequency.setValueAtTime(1320 * pitchLift, now);
+    snap.frequency.exponentialRampToValueAtTime(460, now + 0.035);
+    snapGain.gain.setValueAtTime(0.055, now);
+    snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+    snap.connect(snapGain).connect(ctx.destination);
+    snap.start(now);
+    snap.stop(now + 0.045);
+  }
 }
 
 function makeSpr(k: number, c: number) {
@@ -1255,6 +1632,10 @@ export function PiggyDuelPlugin({
     isNervous: false,
     handChargePct: 0,
     handStateLabel: '',
+    bounceBuffSec: 0,
+    bounceBuffPct: 0,
+    uzziBuffSec: 0,
+    uzziBuffPct: 0,
   }));
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1291,6 +1672,7 @@ export function PiggyDuelPlugin({
     targetCx: WORLD_W * 0.42,
     targetCy: WORLD_H * 0.25,
     velX: 0,
+    velY: 0,
     facing: 1,
     throwHolding: false,
     throwCooldown: 0,
@@ -1320,6 +1702,9 @@ export function PiggyDuelPlugin({
     lastSpriteRow: -1,
     lastFacing: 0,
     afterimages: [] as Afterimage[],
+    handTrail: [] as HandTrailPoint[],
+    handTrailAcc: 0,
+    handHoverY: 0,
 
     // Dynamic Tap / Hold / Release Hand Mechanics (Short Hop, Power Charge, Extended Glide)
     handHoldActive: false,
@@ -1377,7 +1762,7 @@ export function PiggyDuelPlugin({
     slingLocked: false,
 
     // Boss Piggybank Pump-to-Explode & Pattern Movement state
-    px: WORLD_W * 0.34,
+    px: WORLD_W * 0.28,
     py: 0,
     vx: 0,
     vy: 0,
@@ -1402,6 +1787,28 @@ export function PiggyDuelPlugin({
     hurtTimer: 0,
     hurtDir: 1,
     breakTimer: 0,
+    piggyDisguise: 1,
+    disguiseScale: 0.34,
+    heroCapeTimer: 0,
+    heroCapeMax: 5.5,
+    heroCapeAlpha: 0,
+    capeCollarDx: 0,
+    capeCollarDy: 0,
+    capeBackDx: 0,
+    capeBackDy: 0,
+    introTimer: 0,
+    introDuration: 2.95,
+    introStage: 0,
+    introCinematic: 0,
+    screenHitTimer: 0,
+    screenHitMax: 0.34,
+    screenHitIntensity: 0,
+    screenHitIsDirect: false,
+    screenHitIsBreak: false,
+    screenHitX: WORLD_W * 0.5,
+    screenHitY: WORLD_H * 0.5,
+    screenHitCombo: 0,
+    screenComboAura: 0,
 
     // Bouncy Ball state
     ballMorph: 0,
@@ -1413,6 +1820,16 @@ export function PiggyDuelPlugin({
     ballSquashContact: 0,
     stopsSinceBall: 0,
     ballTriggerStops: 3,
+
+    // Dollar Barrage / Vault Lockdown state
+    thrownDollars: [] as ThrownDollar[],
+    dollarTimer: 0,
+    dollarDuration: 3.1,
+    dollarBurstAcc: 0,
+    dollarWaveCount: 0,
+    stopsSinceDollar: 0,
+    dollarTriggerStops: 2,
+    dollarCinematic: 0,
 
     // Nervous state & volatility
     nervousLevel: 0,
@@ -1471,6 +1888,19 @@ export function PiggyDuelPlugin({
 
     // Canvas FX pools
     projectiles: [] as Projectile[],
+    collectibles: [] as ArenaCollectible[],
+    collectibleSpawnTimer: 3.4,
+    collectibleSeq: 1,
+    nextCollectibleKind: 'UZZI' as CollectibleKind,
+    bounceBuffTimer: 0,
+    bounceBuffMax: 10.0,
+    uzziBuffTimer: 0,
+    uzziBuffMax: 10.0,
+    uzziBurstRemaining: 0,
+    uzziBurstTimer: 0,
+    uzziBurstCharge: 0,
+    uzziBurstTotal: 0,
+    uzziBurstFired: 0,
     particles: [] as CanvasParticle[],
     floaters: [] as CanvasFloater[],
     piggyTrail: [] as DualTrailPoint[],
@@ -1478,11 +1908,14 @@ export function PiggyDuelPlugin({
     landingRings: [] as LandingRing[],
     impactFlashes: [] as ImpactFlash[],
     droppingCoins: [] as DroppingCoin[],
+    swallowedCoins: [] as SwallowedCoinRecord[],
+    spilledCoins: [] as SpilledCoin[],
+    breakCoinSoundCooldown: 0,
     slotIntakePulses: [] as SlotIntakePulse[],
     shockwaves: [] as CanvasShockwave[],
     debrisItems: [] as MechanicalDebris[],
     disassemblyParts: [] as DisassemblyPart[],
-    breakMax: 2.35,
+    breakMax: 3.55,
     breakPx: WORLD_W * 0.34,
     breakPy: 0,
     breakDir: 1,
@@ -1523,9 +1956,31 @@ export function PiggyDuelPlugin({
     torsoChestWrap: null as SVGGElement | null,
     torsoBellyWrap: null as SVGGElement | null,
     torsoPelvisWrap: null as SVGGElement | null,
+    torsoMain: null as SVGGElement | null,
     leg0Wrap: null as SVGGElement | null,
     leg1Wrap: null as SVGGElement | null,
+    piggyBankFeet: null as SVGGElement | null,
+    piggyBankFace: null as SVGGElement | null,
+    piggyShell: null as SVGGElement | null,
+    piggyShellTop: null as SVGGElement | null,
+    piggyShellFront: null as SVGGElement | null,
+    piggyShellRear: null as SVGGElement | null,
+    piggyShellBelly: null as SVGGElement | null,
+    piggyShellSeams: null as SVGGElement | null,
     piggyInnerCore: null as SVGGElement | null,
+    heroCapeBack: null as SVGGElement | null,
+    heroCapeClipPath: null as SVGPathElement | null,
+    heroCapeShadow: null as SVGPathElement | null,
+    heroCapeMain: null as SVGPathElement | null,
+    heroCapeWeave: null as SVGPathElement | null,
+    heroCapePleatA: null as SVGPathElement | null,
+    heroCapePleatB: null as SVGPathElement | null,
+    heroCapeFold: null as SVGPathElement | null,
+    heroCapeEdgeInk: null as SVGPathElement | null,
+    heroCapeGuilloche: null as SVGPathElement | null,
+    heroCapeTrim: null as SVGPathElement | null,
+    heroCapeEmblem: null as SVGGElement | null,
+    heroCapeFront: null as SVGGElement | null,
     coreGearA: null as SVGGElement | null,
     coreGearB: null as SVGGElement | null,
     coreGearC: null as SVGGElement | null,
@@ -1862,11 +2317,15 @@ export function PiggyDuelPlugin({
   const getBallWorldCenterY = () => {
     const s = simRef.current;
     const m = s.ballMorph;
+    const dg = s.piggyDisguise;
+    const effScale = PIGGY_SCALE * s.disguiseScale;
     const rBall = getBallSvgRadius(s.bellyLevel);
     const ballIdealDropY = 911 - (BALL_CY + rBall);
-    const normalCenterY = FLOOR_Y + s.py + (545 - 911) * PIGGY_SCALE;
-    const ballCenterY = FLOOR_Y + s.py + (BALL_CY + ballIdealDropY - 911) * PIGGY_SCALE;
-    return normalCenterY * (1 - m) + ballCenterY * m;
+    const normalCenterY = FLOOR_Y + s.py + (545 - 911) * effScale;
+    const ballCenterY = FLOOR_Y + s.py + (BALL_CY + ballIdealDropY - 911) * effScale;
+    const disguiseCenterY = FLOOR_Y + s.py + (628 + 138 - 911) * effScale;
+    const activeBaseY = normalCenterY * (1 - m) + ballCenterY * m;
+    return activeBaseY * (1 - dg) + disguiseCenterY * dg;
   };
 
   const moveHandWithCollision = useCallback((desiredCx: number, desiredCy: number, dt: number, fromPointer = false) => {
@@ -1885,10 +2344,11 @@ export function PiggyDuelPlugin({
     }
 
     const handR = 30;
+    const sc = s.disguiseScale;
     const inBallMode = s.ballMorph > 0.35;
-    const ballR = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE;
-    const bodyRx = inBallMode ? ballR * 0.96 : 62 + s.bellyLevel * 28;
-    const bodyRy = inBallMode ? ballR * 0.96 : 84 + s.bellyLevel * 22;
+    const ballR = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE * sc;
+    const bodyRx = inBallMode ? ballR * 0.96 : (62 + s.bellyLevel * 28) * sc;
+    const bodyRy = inBallMode ? ballR * 0.96 : (84 + s.bellyLevel * 22) * sc;
     const ex = bodyRx + handR;
     const ey = bodyRy + handR;
     const pyCenter = getBallWorldCenterY();
@@ -2006,6 +2466,18 @@ export function PiggyDuelPlugin({
       s.bossFlash = Math.max(s.bossFlash, 0.08);
       s.hurtTimer = Math.max(s.hurtTimer, 0.11);
       s.hurtDir = hitNx >= 0 ? -1 : 1;
+      const slapComboScale = 1 - Math.exp(-Math.max(0, s.combo) * 0.2);
+      const slapIntensity = (intense ? 0.24 : 0.14) + slapComboScale * 0.22;
+      if (slapIntensity >= s.screenHitIntensity * (s.screenHitTimer / Math.max(0.01, s.screenHitMax)) * 0.85) {
+        s.screenHitMax = intense ? 0.24 : 0.19;
+        s.screenHitTimer = s.screenHitMax;
+        s.screenHitIntensity = slapIntensity;
+        s.screenHitIsDirect = false;
+        s.screenHitIsBreak = false;
+        s.screenHitX = contactX;
+        s.screenHitY = contactY;
+        s.screenHitCombo = s.combo;
+      }
       if (inBallMode) {
         s.spBallWall.v += 2.1;
         s.ballSpin += hitNx * 85;
@@ -2071,6 +2543,7 @@ export function PiggyDuelPlugin({
   const getSlotHolePos = () => {
     const s = simRef.current;
     const m = s.ballMorph;
+    const dg = s.piggyDisguise;
     const aS = Math.min(1.3, s.bellyGoal + m * 0.25);
     const sgS = 150 + 70 * aS;
     const gS = 0.9 * aS;
@@ -2085,9 +2558,14 @@ export function PiggyDuelPlugin({
     const rBall = getBallSvgRadius(s.bellyLevel);
     const ballRelX = -32;
     const ballRelY = -rBall * 0.54;
-    const baseRelX = (normalRelX * (1 - m) + ballRelX * m) * PIGGY_SCALE * (s.dir > 0 ? -1 : 1);
-    const baseRelY = (normalRelY * (1 - m) + ballRelY * m) * PIGGY_SCALE;
-    const screenRad = (s.dir > 0 ? -1 : 1) * ((s.ballAngle * m * Math.PI) / 180);
+    const disguiseRelX = 8;
+    const disguiseRelY = -124;
+    const effScale = PIGGY_SCALE * s.disguiseScale;
+    const mechOrBallRelX = normalRelX * (1 - m) + ballRelX * m;
+    const mechOrBallRelY = normalRelY * (1 - m) + ballRelY * m;
+    const baseRelX = (mechOrBallRelX * (1 - dg) + disguiseRelX * dg) * effScale * (s.dir > 0 ? -1 : 1);
+    const baseRelY = (mechOrBallRelY * (1 - dg) + disguiseRelY * dg) * effScale;
+    const screenRad = (s.dir > 0 ? -1 : 1) * ((s.ballAngle * s.ballMorph * Math.PI) / 180);
     const cosA = Math.cos(screenRad);
     const sinA = Math.sin(screenRad);
     const rotX = baseRelX * cosA - baseRelY * sinA;
@@ -2228,24 +2706,28 @@ export function PiggyDuelPlugin({
     const roundSpeedBoost = 1 + Math.floor((s.round - 1) / ROUND_PATTERNS.length) * 0.16;
     const stopDur = Math.max(0.34, pat.baseStop / (frenzyFactor * roundSpeedBoost));
 
+    const shouldRevealIntro = resetRun;
+    const fromTitle = s.phase === 'TITLE_MENU';
+    const initPx = shouldRevealIntro && fromTitle ? Math.max(290, Math.min(620, s.px)) : startSpot.x;
+
     s.patternIndex = patIdx;
     s.spotIndex = 0;
     s.visitedSpots = new Set([0]);
     s.stopDuration = stopDur;
-    s.px = startSpot.x;
-    s.goalAlt = startSpot.alt;
-    s.alt = startSpot.alt;
-    s.prevAlt = startSpot.alt;
+    s.px = initPx;
+    s.goalAlt = shouldRevealIntro ? 0 : startSpot.alt;
+    s.alt = shouldRevealIntro ? 0 : startSpot.alt;
+    s.prevAlt = s.alt;
     s.vAlt = 0;
-    s.py = -startSpot.alt * PIGGY_SCALE;
+    s.py = shouldRevealIntro ? 0 : -startSpot.alt * PIGGY_SCALE;
     s.vx = 0;
     s.vy = 0;
     s.realVx = 0;
     s.prevRealVx = 0;
     s.realAx = 0;
     s.trailSampleAcc = 0;
-    s.onGround = startSpot.alt < 1;
-    s.dir = startSpot.x < WORLD_W * 0.5 ? 1 : -1;
+    s.onGround = s.alt < 1;
+    s.dir = shouldRevealIntro ? 1 : startSpot.x < WORLD_W * 0.5 ? 1 : -1;
     s.walkM = 0;
     s.pumpProgress = 0;
     s.pumpTarget = targetCoins;
@@ -2253,14 +2735,33 @@ export function PiggyDuelPlugin({
     s.pumpHoldMax = holdWindow;
     s.pumpHoldTimer = 0;
     s.pressureBleedFxAcc = 0;
-    s.bossAction = 'PATTERN_STOP';
+    s.bossAction = shouldRevealIntro ? 'INTRO_TRANSFORM' : 'PATTERN_STOP';
     s.bossTimer = stopDur;
+    s.introDuration = 2.95;
+    s.introTimer = shouldRevealIntro ? 2.95 : 0;
+    s.introStage = shouldRevealIntro ? 0 : 3;
+    s.piggyDisguise = shouldRevealIntro ? 1 : 0;
+    s.disguiseScale = shouldRevealIntro ? 0.34 : 1.0;
+    s.heroCapeTimer = 0;
+    s.heroCapeMax = 5.5;
+    s.heroCapeAlpha = 0;
+    s.capeCollarDx = 0;
+    s.capeCollarDy = 0;
+    s.capeBackDx = 0;
+    s.capeBackDy = 0;
+    s.introCinematic = shouldRevealIntro ? 0.08 : 0;
     s.walkTimer = 0;
     s.walkTurnPause = 0;
     s.playerIdleTimer = 0;
     s.bossFlash = 0;
     s.hurtTimer = 0;
     s.breakTimer = 0;
+    s.screenHitTimer = 0;
+    s.screenHitIntensity = 0;
+    s.screenHitIsDirect = false;
+    s.screenHitIsBreak = false;
+    s.screenHitCombo = 0;
+    s.screenComboAura = 0;
     s.ballMorph = 0;
     s.ballAngle = 0;
     s.ballSpin = 0;
@@ -2270,6 +2771,14 @@ export function PiggyDuelPlugin({
     s.ballSquashContact = 0;
     s.stopsSinceBall = 0;
     s.ballTriggerStops = s.difficulty === 'FRENZY' ? 2 : 3;
+    s.thrownDollars = [];
+    s.dollarTimer = 0;
+    s.dollarDuration = s.difficulty === 'FRENZY' ? 2.9 : 3.2;
+    s.dollarBurstAcc = 0;
+    s.dollarWaveCount = 0;
+    s.stopsSinceDollar = 0;
+    s.dollarTriggerStops = 2;
+    s.dollarCinematic = 0;
     s.nervousLevel = 0;
     s.nervousPanicTimer = 0;
     s.nervousSteamAcc = 0;
@@ -2332,14 +2841,34 @@ export function PiggyDuelPlugin({
     s.reloadCompleteFlash = 0;
     s.dryClickFlash = 0;
     s.projectiles = [];
+    s.collectibles = [];
+    s.collectibleSpawnTimer = shouldRevealIntro ? 5.2 : 3.2;
+    s.nextCollectibleKind = 'UZZI';
+    s.bounceBuffTimer = 0;
+    s.bounceBuffMax = 10.0;
+    s.uzziBuffTimer = 0;
+    s.uzziBuffMax = 10.0;
+    s.uzziBurstRemaining = 0;
+    s.uzziBurstTimer = 0;
+    s.uzziBurstCharge = 0;
+    s.uzziBurstTotal = 0;
+    s.uzziBurstFired = 0;
     s.particles = [];
     s.floaters = [];
     s.afterimages = [];
+    s.handTrail = [];
+    s.handTrailAcc = 0;
+    s.handHoverY = 0;
+    s.velX = 0;
+    s.velY = 0;
     s.piggyTrail = [];
     s.ballAfterimages = [];
     s.landingRings = [];
     s.impactFlashes = [];
     s.droppingCoins = [];
+    s.swallowedCoins = [];
+    s.spilledCoins = [];
+    s.breakCoinSoundCooldown = 0;
     s.slotIntakePulses = [];
     s.shockwaves = [];
     s.debrisItems = [];
@@ -2368,9 +2897,33 @@ export function PiggyDuelPlugin({
     if (s.topScrewShank) s.topScrewShank.setAttribute('opacity', '0');
     if (s.leftSocket) s.leftSocket.style.opacity = '1';
     if (s.rightSocket) s.rightSocket.style.opacity = '1';
+    if (s.torsoMain) {
+      s.torsoMain.style.opacity = shouldRevealIntro ? '0' : '1';
+    }
+    if (s.piggyBankFeet) {
+      s.piggyBankFeet.setAttribute('transform', '');
+      s.piggyBankFeet.style.opacity = shouldRevealIntro ? '1' : '0';
+    }
+    if (s.piggyBankFace) {
+      s.piggyBankFace.setAttribute('transform', '');
+      s.piggyBankFace.style.opacity = shouldRevealIntro ? '1' : '0';
+    }
+    if (s.piggyShell) {
+      s.piggyShell.style.opacity = shouldRevealIntro ? '1' : '0';
+    }
+    if (s.piggyShellTop) s.piggyShellTop.setAttribute('transform', '');
+    if (s.piggyShellFront) s.piggyShellFront.setAttribute('transform', '');
+    if (s.piggyShellRear) s.piggyShellRear.setAttribute('transform', '');
+    if (s.piggyShellBelly) s.piggyShellBelly.setAttribute('transform', '');
+    if (s.piggyShellSeams) s.piggyShellSeams.setAttribute('opacity', '0');
+    if (s.heroCapeBack) s.heroCapeBack.setAttribute('opacity', '0');
+    if (s.heroCapeFront) s.heroCapeFront.setAttribute('opacity', '0');
     if (s.piggyPos) {
       s.piggyPos.style.opacity = '1';
       s.piggyPos.style.filter = '';
+    }
+    if (shouldRevealIntro) {
+      synthRef.current?.playIntroAwakenStart();
     }
     const initProfile =
       s.laserModeSetting === 'AUTO'
@@ -2429,6 +2982,10 @@ export function PiggyDuelPlugin({
       isNervous: false,
       handChargePct: 0,
       handStateLabel: '',
+      bounceBuffSec: 0,
+      bounceBuffPct: 0,
+      uzziBuffSec: 0,
+      uzziBuffPct: 0,
     }));
   }, []);
 
@@ -2499,11 +3056,15 @@ export function PiggyDuelPlugin({
 
   // Hand/Cursor Hit State: Revolver-Gated Sling-Laser Coin Throw (https://i.imgur.com/XE4l8eT.png)
   const throwCoin = useCallback(
-    (fromHold = false, chargePower = 0) => {
+    (
+      fromHold = false,
+      chargePower = 0,
+      opts?: { bypassCooldown?: boolean; spreadRad?: number; velocityBoost?: number; uziShot?: boolean }
+    ) => {
       const s = simRef.current;
       synthRef.current?.unlock();
       if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') return false;
-      if (s.throwCooldown > 0) return false;
+      if (!opts?.bypassCooldown && s.throwCooldown > 0) return false;
 
       if (s.isReloading) {
         if (!fromHold) {
@@ -2524,37 +3085,54 @@ export function PiggyDuelPlugin({
 
       const pwr = Math.max(0, Math.min(1, chargePower));
       const launch = getSlingLaunchState();
+      const spread = opts?.spreadRad ?? 0;
+      const vBoost = opts?.velocityBoost ?? (s.uzziBuffTimer > 0 ? 1.15 : 1.0);
+      const cosSp = Math.cos(spread);
+      const sinSp = Math.sin(spread);
+      const shotVx = (launch.vx * cosSp - launch.vy * sinSp) * vBoost;
+      const shotVy = (launch.vx * sinSp + launch.vy * cosSp) * vBoost;
+      const isUzi = Boolean(opts?.uziShot || s.uzziBuffTimer > 0);
+
       s.revolverChambers -= 1;
       s.cylinderTargetAngle += (Math.PI * 2) / s.revolverMax;
-      s.throwCooldown = s.throwCooldownMax;
-      s.throwAnimTimer = 0.13;
-      s.facing = -launch.facing;
-      if (pwr < 0.15) {
+      s.throwCooldown = s.uzziBuffTimer > 0 ? 0.052 : s.throwCooldownMax;
+      s.throwAnimTimer = isUzi ? 0.075 : 0.13;
+      s.facing = shotVx >= 0 ? -1 : 1;
+      if (isUzi) {
+        synthRef.current?.playUziShot(s.uzziBurstFired);
+        spawnCollisionFx(launch.spawnX, launch.spawnY, shotVx >= 0 ? 1 : -1, shotVy >= 0 ? 1 : -1, '#F97316', false);
+      } else if (pwr < 0.15) {
         synthRef.current?.playThrow();
       }
 
       const pumpValue = 1.0;
+      const isSuperBounce = s.bounceBuffTimer > 0;
+      const coinLife = isSuperBounce ? 5.6 + pwr * 0.8 : 2.0 + pwr * 0.25;
       s.projectiles.push({
         kind: 'thrown_coin',
         x: launch.spawnX,
         y: launch.spawnY,
-        vx: launch.vx,
-        vy: launch.vy,
+        vx: shotVx,
+        vy: shotVy,
         r: 21 + pwr * 6,
         rot: 0,
-        vrot: launch.facing * (680 + pwr * 420),
-        life: 2.0 + pwr * 0.25,
-        maxLife: 2.0 + pwr * 0.25,
-        gravity: launch.gravity,
+        vrot: (shotVx >= 0 ? 1 : -1) * (isUzi ? 920 + pwr * 420 : 680 + pwr * 420),
+        life: coinLife,
+        maxLife: coinLife,
+        gravity: launch.gravity * (vBoost > 1 ? 1.06 : 1),
         bounces: 0,
         armorHitCooldown: 0,
+        trail: [{ x: launch.spawnX, y: launch.spawnY }],
         power: pwr,
         pumpValue,
         missedHandled: false,
+        superBounce: isSuperBounce,
+        uziShot: isUzi,
       });
 
       // Revolver empties -> swing out cylinder & sweep orbit threshold to reload
       if (s.revolverChambers <= 0) {
+        s.uzziBurstRemaining = 0;
         startRevolverReload(true);
       }
       return true;
@@ -2569,8 +3147,8 @@ export function PiggyDuelPlugin({
     if (s.phase !== 'PLAYING') return;
     if (s.dashCooldown > 0) return;
 
-    const dx = s.cx - s.prevCx;
-    const dy = s.cy - s.prevCy;
+    const dx = Math.abs(s.velX) > 25 || Math.abs(s.velY) > 25 ? s.velX : s.cx - s.prevCx;
+    const dy = Math.abs(s.velX) > 25 || Math.abs(s.velY) > 25 ? s.velY : s.cy - s.prevCy;
     let ang = Math.atan2(dy, dx);
     if (Math.hypot(dx, dy) < 1.5) {
       ang = Math.atan2(s.cy - (FLOOR_Y + s.py - Math.round(205 * PIGGY_UNIT)), s.cx - s.px);
@@ -2578,18 +3156,18 @@ export function PiggyDuelPlugin({
 
     s.dashCooldown = s.dashMaxCooldown;
     s.dashTimer = 0.16;
-    s.dashVx = Math.cos(ang) * 1950;
-    s.dashVy = Math.sin(ang) * 1950;
-    s.handHopVy = Math.min(s.handHopVy, -380);
-    s.handScaleX = 1.2;
-    s.handScaleY = 0.84;
+    s.dashVx = Math.cos(ang) * 1980;
+    s.dashVy = Math.sin(ang) * 1980;
+    s.handHopVy = Math.min(s.handHopVy, -340);
+    s.handScaleX = 1.14;
+    s.handScaleY = 0.88;
     if (extendGlide) {
       s.dashHolding = true;
       s.dashGlideFuel = 0.65;
     }
     s.throwAnimTimer = 0.14;
     synthRef.current?.playDash();
-    spawnBurst(s.cx, s.cy, '#38BDF8', 10, 260, 0);
+    spawnBurst(s.cx, s.cy, '#38BDF8', 7, 230, 0);
   }, []);
 
   // Tap vs. Hold vs. Release Hand Controller
@@ -2598,6 +3176,7 @@ export function PiggyDuelPlugin({
     s.playerIdleTimer = 0;
     synthRef.current?.unlock();
     if (s.phase !== 'PLAYING' && s.phase !== 'TITLE_MENU') return;
+    if (s.uzziBurstRemaining > 0) return;
     if (s.isReloading) {
       s.dryClickFlash = 0.22;
       synthRef.current?.playDryClick();
@@ -2640,8 +3219,36 @@ export function PiggyDuelPlugin({
       return;
     }
 
+    const triggerUziClipBurst = (releaseCharge: number) => {
+      const clipCount = s.revolverChambers;
+      if (clipCount <= 0) return false;
+      s.handCharge = releaseCharge;
+      const firedFirst = throwCoin(false, releaseCharge, {
+        bypassCooldown: true,
+        spreadRad: 0,
+        velocityBoost: 1.16,
+        uziShot: true,
+      });
+      s.handCharge = 0;
+      if (!firedFirst) return false;
+      const remainingToDump = Math.min(clipCount - 1, s.revolverChambers);
+      if (remainingToDump > 0) {
+        s.uzziBurstRemaining = remainingToDump;
+        s.uzziBurstTimer = 0.048;
+        s.uzziBurstCharge = releaseCharge;
+        s.uzziBurstTotal = clipCount;
+        s.uzziBurstFired = 1;
+      } else {
+        s.uzziBurstRemaining = 0;
+      }
+      if (clipCount > 1) {
+        spawnFloater(s.cx, Math.max(70, s.cy - 54), `UZZI ×${clipCount}!`, '#EA580C', 17);
+      }
+      return true;
+    };
+
     if (dur < 0.17) {
-      // Quick Tap -> Short Hand Hop + Crisp Snap Coin Toss!
+      // Quick Tap -> Short Hand Hop + Crisp Snap Coin Toss (or Full-Mag UZZI Burst!)
       s.handHopVy = -640;
       s.handScaleX = 0.84;
       s.handScaleY = 1.26;
@@ -2653,20 +3260,26 @@ export function PiggyDuelPlugin({
         maxRx: 46,
         life: 0.24,
         maxLife: 0.24,
-        color: 'rgba(245, 158, 11, 0.45)',
+        color: s.uzziBuffTimer > 0 ? 'rgba(249, 115, 22, 0.55)' : 'rgba(245, 158, 11, 0.45)',
       });
       spawnDustPuff(s.cx, s.cy + 14, -s.facing, 3, 120);
       synthRef.current?.playHandHop();
-      throwCoin(false, 0);
+      if (s.uzziBuffTimer > 0 && s.revolverChambers > 0) {
+        triggerUziClipBurst(0);
+      } else {
+        throwCoin(false, 0);
+      }
       s.laserHoldSnapshot = Math.max(0.14, growSnap);
       s.laserFadeTimer = 0.16;
     } else {
-      // Hold Release -> Power Shot + Launch Lunge + Extended Glide!
+      // Hold Release -> Power Shot + Launch Lunge + Extended Glide (or Charged UZZI Full-Mag Spray!)
       const prevCharge = charge;
-      // Preserve charge momentarily for getSlingLaunchState inside throwCoin
       s.handCharge = prevCharge;
       const launch = getSlingLaunchState();
-      const fired = throwCoin(false, prevCharge);
+      const fired =
+        s.uzziBuffTimer > 0 && s.revolverChambers > 0
+          ? triggerUziClipBurst(prevCharge)
+          : throwCoin(false, prevCharge);
       s.handCharge = 0;
       s.laserHoldSnapshot = Math.max(0.24, growSnap);
       s.laserFadeTimer = 0.24;
@@ -2705,9 +3318,6 @@ export function PiggyDuelPlugin({
       }
       s.targetCx = nx;
       s.targetCy = ny;
-      if (s.dashTimer <= 0 && !s.handHoldActive && s.handGlideTimer <= 0) {
-        moveHandWithCollision(nx, ny, 0.016, true);
-      }
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -2843,7 +3453,7 @@ export function PiggyDuelPlugin({
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [cycleLaserMode, moveHandWithCollision, performDash, releaseHandPress, setupRound, startHandPress, startRevolverReload]);
+  }, [cycleLaserMode, performDash, releaseHandPress, setupRound, startHandPress, startRevolverReload]);
 
   // Main 60fps Loop
   useEffect(() => {
@@ -2915,9 +3525,31 @@ export function PiggyDuelPlugin({
     s.torsoChestWrap = $('torso-chest-wrap') as SVGGElement;
     s.torsoBellyWrap = $('torso-belly-wrap') as SVGGElement;
     s.torsoPelvisWrap = $('torso-pelvis-wrap') as SVGGElement;
+    s.torsoMain = $('torso-main') as SVGGElement;
     s.leg0Wrap = $('L0-wrap') as SVGGElement;
     s.leg1Wrap = $('L1-wrap') as SVGGElement;
+    s.piggyBankFeet = $('piggy-bank-feet') as SVGGElement;
+    s.piggyBankFace = $('piggy-bank-face') as SVGGElement;
+    s.piggyShell = $('piggybank-shell') as SVGGElement;
+    s.piggyShellTop = $('piggy-shell-top') as SVGGElement;
+    s.piggyShellFront = $('piggy-shell-front') as SVGGElement;
+    s.piggyShellRear = $('piggy-shell-rear') as SVGGElement;
+    s.piggyShellBelly = $('piggy-shell-belly') as SVGGElement;
+    s.piggyShellSeams = $('piggy-shell-seams') as SVGGElement;
     s.piggyInnerCore = $('piggy-inner-core') as SVGGElement;
+    s.heroCapeBack = $('hero-cape-back') as SVGGElement;
+    s.heroCapeClipPath = $('hero-cape-clip-path') as SVGPathElement;
+    s.heroCapeShadow = $('hero-cape-shadow') as SVGPathElement;
+    s.heroCapeMain = $('hero-cape-main') as SVGPathElement;
+    s.heroCapeWeave = $('hero-cape-weave') as SVGPathElement;
+    s.heroCapePleatA = $('hero-cape-pleat-a') as SVGPathElement;
+    s.heroCapePleatB = $('hero-cape-pleat-b') as SVGPathElement;
+    s.heroCapeFold = $('hero-cape-fold') as SVGPathElement;
+    s.heroCapeEdgeInk = $('hero-cape-edge-ink') as SVGPathElement;
+    s.heroCapeGuilloche = $('hero-cape-guilloche') as SVGPathElement;
+    s.heroCapeTrim = $('hero-cape-trim') as SVGPathElement;
+    s.heroCapeEmblem = $('hero-cape-emblem') as SVGGElement;
+    s.heroCapeFront = $('hero-cape-front') as SVGGElement;
     s.coreGearA = $('core-gear-a') as SVGGElement;
     s.coreGearB = $('core-gear-b') as SVGGElement;
     s.coreGearC = $('core-gear-c') as SVGGElement;
@@ -2973,7 +3605,7 @@ export function PiggyDuelPlugin({
       el?.setAttribute('transform', `rotate(${a.toFixed(2)} ${x} ${y})`);
     };
 
-    const applyBalloon = (a: number, st = 0, wob = 0, m = 0, belly = 0) => {
+    const applyBalloon = (a: number, st = 0, wob = 0, m = 0, belly = 0, dg = 0) => {
       const CX = 560;
       const CY = 650;
       const sg = 150 + 70 * a;
@@ -3009,6 +3641,14 @@ export function PiggyDuelPlugin({
             by = by + (syPt - by) * m;
           }
         }
+
+        // Dedicated Horizontal-Piggybank Morph: folds tall upright mech torso into a wide low horizontal core inside the ceramic shell!
+        if (dg > 0.002) {
+          const hx = 562 + (bx - 550) * 1.24;
+          const hy = 628 + (by - 510) * 0.54;
+          bx = bx + (hx - bx) * dg;
+          by = by + (hy - by) * dg;
+        }
         return [bx, by];
       };
 
@@ -3030,7 +3670,7 @@ export function PiggyDuelPlugin({
 
       for (const e of s.balloonEllipses) {
         const [nx, ny] = push(e.cx, e.cy);
-        const ballEllipseShrink = 1 - 0.18 * m;
+        const ballEllipseShrink = 1 - 0.18 * m - 0.14 * dg;
         e.el.setAttribute('cx', fmt(nx));
         e.el.setAttribute('cy', fmt(ny));
         e.el.setAttribute('rx', fmt(e.rx * grow * ballEllipseShrink * (1 - st * 0.6)));
@@ -3041,7 +3681,7 @@ export function PiggyDuelPlugin({
       const [tx, ty] = push(696, 634);
       s.tailMount?.setAttribute('transform', `translate(${fmt(tx - 696)} ${fmt(ty - 634)})`);
 
-      // Coin slot smoothly settles onto the curved sphere surface in ball mode
+      // Coin slot glides smoothly from horizontal top spine of the piggybank down onto the upright mech's angled chest!
       const aS = Math.min(1.3, s.bellyGoal + m * 0.25);
       const sgS = 150 + 70 * aS;
       const gS = 0.9 * aS;
@@ -3052,19 +3692,33 @@ export function PiggyDuelPlugin({
       const normalPy = 450 + dyS * kS;
       const ballSlotX = BALL_CX - 32;
       const ballSlotY = BALL_CY - rBall * 0.54;
-      const px = normalPx * (1 - m) + ballSlotX * m;
-      const py = normalPy * (1 - m) + ballSlotY * m;
-      const ss = (1 + 0.3 * aS) * (1 - 0.18 * m);
-      s.slotFollow?.setAttribute(
-        'transform',
-        `translate(${fmt(px - 545)} ${fmt(py - 450)}) translate(545 450) scale(${fmt(ss)} ${fmt(ss)}) translate(-545 -450)`
-      );
+      const basePx = normalPx * (1 - m) + ballSlotX * m;
+      const basePy = normalPy * (1 - m) + ballSlotY * m;
+      const px = basePx * (1 - dg) + 558 * dg;
+      const py = basePy * (1 - dg) + 492 * dg;
+      const slotRot = 34 * dg;
+      const ss = (1 + 0.3 * aS) * (1 - 0.18 * m) * (1 - 0.22 * dg);
+      if (s.slotFollow) {
+        s.slotFollow.setAttribute(
+          'transform',
+          `translate(${fmt(px - 545)} ${fmt(py - 450)}) translate(545 450) rotate(${slotRot.toFixed(1)}) scale(${fmt(ss)} ${fmt(ss)}) translate(-545 -450)`
+        );
+        const slotVisOp = 1 - Math.max(0, Math.min(1, (dg - 0.72) / 0.24));
+        s.slotFollow.style.opacity = dg > 0.72 ? slotVisOp.toFixed(2) : '1';
+      }
 
       const [jx, jy] = push(742, 672);
       s.jetFollow?.setAttribute('transform', `translate(${fmt(jx - 742)} ${fmt(jy - 672)})`);
 
+      const [collarX, collarY] = push(454, 246);
+      const [backX, backY] = push(594, 212);
+      s.capeCollarDx = (collarX - 454) * (1 - dg);
+      s.capeCollarDy = (collarY - 246) * (1 - dg);
+      s.capeBackDx = (backX - 594) * (1 - dg);
+      s.capeBackDy = (backY - 212) * (1 - dg);
+
       if (s.ballShellOverlay) {
-        s.ballShellOverlay.setAttribute('opacity', (m * 0.92).toFixed(2));
+        s.ballShellOverlay.setAttribute('opacity', (m * 0.88).toFixed(2));
         if (m > 0.01) {
           const shellScale = rBall / 236;
           s.ballShellOverlay.setAttribute(
@@ -3127,20 +3781,24 @@ export function PiggyDuelPlugin({
       const sx = s.spSx.step(clampAbs(s.ay * 0.000045 + landFlex * 0.06, 0.1), dt);
       const accelLean = clampAbs(-s.realAx * 0.0022 * s.dir - speedNorm * 4.5, 16);
       const lean = s.spLean.step(clampAbs(-1.1 * dm + accelLean, 18), dt);
+      const dCin = s.dollarCinematic;
       const hurtArm = s.hurtTimer > 0 ? -36 : 0;
       const anticipateNext =
         s.bossAction === 'PATTERN_STOP' && s.bossTimer < 0.26 ? -24 : 0;
+      const dollarThrowBeat = dCin > 0.05 ? Math.sin(nowMs * 0.018) * 34 * dCin : 0;
       const windupArm =
         s.bossAction === 'JET_FLIGHT'
           ? -18 - Math.min(14, speedNorm * 10)
           : hurtArm || anticipateNext;
-      const isWalkingPose = s.bossAction === 'WALK' && s.alt <= 8 && s.ballMorph < 0.2;
+      const isWalkingPose = s.bossAction === 'WALK' && s.alt <= 8 && s.ballMorph < 0.2 && dCin < 0.25;
       const targetLa = isWalkingPose
         ? -32 + 5 * mm * s1 + hurtArm * 0.45
-        : 8 * mm * s1 + clampAbs(s.ay * 0.014, 16) - lean * 0.85 + windupArm - landFlex * 18;
+        : (8 * mm * s1 + clampAbs(s.ay * 0.014, 16) - lean * 0.85 + windupArm - landFlex * 18) * (1 - dCin) +
+          (-46 - dollarThrowBeat) * dCin;
       const targetRa = isWalkingPose
         ? 72 - 5 * mm * s1 - hurtArm * 0.45
-        : -7 * mm * s1 - clampAbs(s.ay * 0.014, 16) - lean * 0.85 - windupArm + landFlex * 18;
+        : (-7 * mm * s1 - clampAbs(s.ay * 0.014, 16) - lean * 0.85 - windupArm + landFlex * 18) * (1 - dCin) +
+          (64 + dollarThrowBeat) * dCin;
       const la = s.spLa.step(targetLa, dt);
       const ra = s.spRa.step(targetRa, dt);
       const airTailDrag = -s.dir * Math.min(18, Math.abs(s.realVx) * 0.018) + clampAbs(s.vAlt * 0.035, 16);
@@ -3163,6 +3821,8 @@ export function PiggyDuelPlugin({
       const revvingJet = s.bossAction === 'PATTERN_STOP' && s.bossTimer < 0.26 && s.moveTargetAlt > 10;
       let thr = flying
         ? 0.4 + 0.35 * Math.min(1, Math.abs(s.vAlt) / 150) + 0.32 * sp + (s.vAlt > 20 ? 0.22 : 0)
+        : s.bossAction === 'INTRO_TRANSFORM' && s.introStage >= 2
+        ? 0.86
         : revvingJet
         ? 0.52
         : s.bossAction === 'PATTERN_MOVE'
@@ -3177,37 +3837,50 @@ export function PiggyDuelPlugin({
       const vibR = vb * 0.45 * Math.sin(nowMs * 0.11 + 0.5);
 
       const m = s.ballMorph;
-      const limbFade = Math.max(0, 1 - m * 1.65);
-      const tuckScale = Math.max(0.14, 1 - 0.86 * m);
-      const tuckAttr = m > 0.005 ? `translate(${BALL_CX} ${BALL_CY}) scale(${tuckScale.toFixed(3)}) translate(${-BALL_CX} ${-BALL_CY})` : '';
-      const tuckOp = m > 0.005 ? limbFade.toFixed(2) : '1';
+      const dg = s.piggyDisguise;
+      const shellM = m;
+      const smooth01 = (v: number, a: number, b: number) => Math.max(0, Math.min(1, (v - a) / Math.max(0.001, b - a)));
+      const legHide = Math.max(m, smooth01(dg, 0.38, 0.84));
+      const screwHide = Math.max(m, smooth01(dg, 0.28, 0.72));
+      const armHide = Math.max(m, smooth01(dg, 0.12, 0.54));
+
+      const legFade = Math.max(0, 1 - legHide * 1.65);
+      const legTuckScale = Math.max(0.14, 1 - 0.86 * legHide);
+      const legTuckOp = legHide > 0.005 ? legFade.toFixed(2) : '1';
+
+      const armFade = Math.max(0, 1 - armHide * 1.65);
+      const armTuckScale = Math.max(0.14, 1 - 0.86 * armHide);
+      const armTuckAttr =
+        armHide > 0.005
+          ? `translate(${BALL_CX} ${BALL_CY}) scale(${armTuckScale.toFixed(3)}) translate(${-BALL_CX} ${-BALL_CY})`
+          : '';
+      const armTuckOp = armHide > 0.005 ? armFade.toFixed(2) : '1';
 
       if (s.legsG) {
-        if (m > 0.005) {
+        if (legHide > 0.005) {
           s.legsG.setAttribute(
             'transform',
-            `translate(${(vibX * 1.3).toFixed(2)} ${(dyN + vibY * 1.3 - 150 * m).toFixed(2)}) translate(${BALL_CX} ${BALL_CY + 140}) scale(${tuckScale.toFixed(3)}) translate(${-BALL_CX} ${-(BALL_CY + 140)})`
+            `translate(${(vibX * 1.3).toFixed(2)} ${(dyN + vibY * 1.3 - 150 * legHide).toFixed(2)}) translate(${BALL_CX} ${BALL_CY + 140}) scale(${legTuckScale.toFixed(3)}) translate(${-BALL_CX} ${-(BALL_CY + 140)})`
           );
-          s.legsG.style.opacity = tuckOp;
+          s.legsG.style.opacity = legTuckOp;
         } else {
           s.legsG.setAttribute('transform', `translate(${(vibX * 1.3).toFixed(2)} ${(dyN + vibY * 1.3).toFixed(2)})`);
           s.legsG.style.opacity = '1';
         }
       }
-      if (s.la) s.la.style.opacity = tuckOp;
-      if (s.ra) s.ra.style.opacity = tuckOp;
-      if (s.tailMount) s.tailMount.style.opacity = tuckOp;
-      if (s.leftArmTuck) s.leftArmTuck.setAttribute('transform', tuckAttr);
-      if (s.rightArmTuck) s.rightArmTuck.setAttribute('transform', tuckAttr);
+      if (s.la) s.la.style.opacity = armTuckOp;
+      if (s.ra) s.ra.style.opacity = armTuckOp;
+      if (s.tailMount) s.tailMount.style.opacity = armTuckOp;
+      if (s.leftArmTuck) s.leftArmTuck.setAttribute('transform', armTuckAttr);
+      if (s.rightArmTuck) s.rightArmTuck.setAttribute('transform', armTuckAttr);
 
-      const attachFade = Math.max(0, 1 - m * 1.45).toFixed(2);
-      const attachTuckScale = Math.max(0.22, 1 - 0.78 * m);
+      const attachFade = Math.max(0, 1 - armHide * 1.45).toFixed(2);
+      const attachTuckScale = Math.max(0.22, 1 - 0.78 * armHide);
       const attachAttr =
-        m > 0.005
+        armHide > 0.005
           ? `translate(${BALL_CX} ${BALL_CY}) scale(${attachTuckScale.toFixed(3)}) translate(${-BALL_CX} ${-BALL_CY})`
           : '';
       for (const attachEl of [
-        s.topScrewWrap,
         s.leftPauldron,
         s.rightPauldronWrap,
         s.leftSocket,
@@ -3215,8 +3888,189 @@ export function PiggyDuelPlugin({
         s.jetTuckWrap,
       ]) {
         if (!attachEl) continue;
-        attachEl.style.opacity = m > 0.005 ? attachFade : '1';
+        attachEl.style.opacity = armHide > 0.005 ? attachFade : '1';
         attachEl.setAttribute('transform', attachAttr);
+      }
+
+      if (s.topScrewWrap) {
+        const screwFade = Math.max(0, 1 - screwHide * 1.45).toFixed(2);
+        const screwScale = Math.max(0.22, 1 - 0.78 * screwHide);
+        s.topScrewWrap.style.opacity = screwHide > 0.005 ? screwFade : '1';
+        s.topScrewWrap.setAttribute(
+          'transform',
+          screwHide > 0.005
+            ? `translate(${BALL_CX} ${BALL_CY}) scale(${screwScale.toFixed(3)}) translate(${-BALL_CX} ${-BALL_CY})`
+            : ''
+        );
+      }
+
+      // Metal mech torso reveals smoothly right as the horizontal ceramic piggybank carapace splits open
+      if (s.torsoMain) {
+        const mechTorsoOp = 1 - smooth01(dg, 0.7, 0.96);
+        s.torsoMain.style.opacity = mechTorsoOp.toFixed(2);
+      }
+
+      // Sculpted Horizontal Ceramic Piggybank Carapace & Split-Seam Mechanical Transformation
+      const shellOp = smooth01(dg, 0.04, 0.44);
+      const crack = smooth01(1 - dg, 0.04, 0.76);
+      if (s.piggyShell) {
+        s.piggyShell.style.opacity = shellOp.toFixed(2);
+      }
+      if (s.piggyShellTop) {
+        s.piggyShellTop.setAttribute(
+          'transform',
+          `translate(${(crack * 24).toFixed(1)} ${(-crack * 98).toFixed(1)}) rotate(${(crack * 18).toFixed(1)} 560 515)`
+        );
+      }
+      if (s.piggyShellFront) {
+        s.piggyShellFront.setAttribute(
+          'transform',
+          `translate(${(-crack * 116).toFixed(1)} ${(-crack * 18).toFixed(1)}) rotate(${(-crack * 22).toFixed(1)} 415 620)`
+        );
+      }
+      if (s.piggyShellRear) {
+        s.piggyShellRear.setAttribute(
+          'transform',
+          `translate(${(crack * 124).toFixed(1)} ${(-crack * 12).toFixed(1)}) rotate(${(crack * 19).toFixed(1)} 715 620)`
+        );
+      }
+      if (s.piggyShellBelly) {
+        s.piggyShellBelly.setAttribute(
+          'transform',
+          `translate(0 ${(crack * 78).toFixed(1)}) scale(1 ${(1 - crack * 0.25).toFixed(3)})`
+        );
+      }
+      if (s.piggyShellSeams) {
+        const seamGlow = s.bossAction === 'INTRO_TRANSFORM' && dg > 0.12
+          ? Math.sin(Math.min(1, crack * 1.45) * Math.PI)
+          : 0;
+        s.piggyShellSeams.setAttribute('opacity', Math.max(0, seamGlow).toFixed(2));
+      }
+      if (s.piggyBankFeet) {
+        const feetOp = smooth01(dg, 0.34, 0.8);
+        s.piggyBankFeet.style.opacity = feetOp.toFixed(2);
+        s.piggyBankFeet.setAttribute(
+          'transform',
+          `translate(0 ${(crack * 56).toFixed(1)}) translate(560 755) scale(${(0.45 + 0.55 * feetOp).toFixed(3)}) translate(-560 -755)`
+        );
+      }
+      if (s.piggyBankFace) {
+        const faceOp = smooth01(dg, 0.14, 0.58);
+        s.piggyBankFace.style.opacity = faceOp.toFixed(2);
+      }
+
+      // Artistic Crisp One-Dollar ($1) Bill Cape — Fitted Shoulder Drape & Paper-Cotton Wave Physics
+      const capeFade = s.heroCapeAlpha * Math.max(0, 1 - m * 1.45) * (1 - smooth01(dg, 0.14, 0.38));
+      if (s.heroCapeBack && s.heroCapeFront) {
+        if (capeFade > 0.01) {
+          const capeAge = Math.max(0, s.heroCapeMax - s.heroCapeTimer);
+          const unfurl = Math.min(1, capeAge / 0.38);
+          const snapPop = unfurl < 1 ? Math.sin(unfurl * Math.PI) * 0.12 : 0;
+          const reach = Math.max(0.28, Math.min(1.12, unfurl + snapPop));
+
+          const wt = nowMs * 0.0074;
+          const speedDrag = Math.min(115, Math.abs(s.realVx) * 0.145);
+          const windForce = s.thrS * 34 + speedDrag;
+          const fallLift = clampAbs(s.vAlt * 0.2, 48);
+          const billowLift = Math.min(1, windForce / 115);
+
+          // Progressive paper-cloth flutter waves: calm subtle drape at rest, vibrant crisp waves when jetting/dashing
+          const amp = 5.5 + s.thrS * 11 + speedDrag * 0.068;
+          const w1 = Math.sin(wt) * amp * 0.48;
+          const w2 = Math.sin(wt - 1.2) * amp * 0.85 + Math.sin(wt * 1.7 - 0.5) * 2.6;
+          const w3 = Math.sin(wt - 2.35) * amp * 1.15 + Math.cos(wt * 1.6) * 3.4;
+          const w4 = Math.cos(wt * 0.85 - 1.8) * amp * 0.72;
+
+          // Anchored directly along the deformed upper collar & curved spine ridge
+          const topAnchorX = 538 + s.capeBackDx * 0.72;
+          const topAnchorY = 188 + s.capeBackDy * 0.72;
+          const midBackX = 602 + s.capeBackDx;
+          const midBackY = 218 + s.capeBackDy;
+
+          // At rest, drapes gracefully downward along the pig's arched back; bills outward cleanly when flying/sprinting
+          const cornerTopX = topAnchorX + (176 + windForce * 1.18) * reach;
+          const cornerTopY = topAnchorY + 126 - billowLift * 68 + w1 * 0.65 - fallLift * 0.42;
+          const outerMidX = cornerTopX + (26 + windForce * 0.24) * reach + w2 * 0.42;
+          const outerMidY = (cornerTopY + 754) * 0.5 + w2 * 0.58 - fallLift * 0.52;
+          const cornerBotX = topAnchorX + (226 + windForce * 1.22) * reach;
+          const cornerBotY = Math.min(846, 772 - billowLift * 52 + w3 - fallLift * 0.78);
+
+          const botMidX = 668 + (62 + windForce * 0.48) * reach + w4 * 0.28;
+          const botMidY = Math.min(862, 804 - billowLift * 36 - w2 * 0.48 - fallLift * 0.58);
+          const hemInnerX = 536 + 24 * reach + w1 * 0.24;
+          const hemInnerY = Math.min(852, 758 + w4 * 0.35 - fallLift * 0.36);
+
+          // Darker green reverse of the $1 bill peeking naturally around the outer curled edge
+          const revTopX = cornerTopX + 12 * reach;
+          const revTopY = cornerTopY + 11 + w1 * 0.3;
+          const revBotX = cornerBotX + 15 * reach;
+          const revBotY = Math.min(858, cornerBotY + 13 + w3 * 0.32);
+          s.heroCapeShadow?.setAttribute(
+            'd',
+            `M ${midBackX.toFixed(1)} ${midBackY.toFixed(1)} C ${(midBackX + 82 * reach).toFixed(1)} ${(midBackY + 26 + w1 * 0.35).toFixed(1)}, ${(cornerTopX - 18).toFixed(1)} ${(cornerTopY + 4).toFixed(1)}, ${revTopX.toFixed(1)} ${revTopY.toFixed(1)} Q ${(outerMidX + 18).toFixed(1)} ${(outerMidY + 12).toFixed(1)}, ${revBotX.toFixed(1)} ${revBotY.toFixed(1)} C ${(botMidX + 34).toFixed(1)} ${(botMidY + 14).toFixed(1)}, ${(hemInnerX + 16).toFixed(1)} ${(hemInnerY + 12).toFixed(1)}, ${(hemInnerX - 46).toFixed(1)} 696 L 526 440 Z`
+          );
+
+          // Smooth shoulder-hugging S-curve top edge & draped $1 Banknote silhouette
+          const topCtrl1X = topAnchorX + 74 * reach;
+          const topCtrl1Y = topAnchorY + 24 + w1 * 0.32;
+          const topCtrl2X = cornerTopX - 42 * reach;
+          const topCtrl2Y = cornerTopY - 22 - w2 * 0.32;
+          const mainD = `M ${topAnchorX.toFixed(1)} ${topAnchorY.toFixed(1)} C ${topCtrl1X.toFixed(1)} ${topCtrl1Y.toFixed(1)}, ${topCtrl2X.toFixed(1)} ${topCtrl2Y.toFixed(1)}, ${cornerTopX.toFixed(1)} ${cornerTopY.toFixed(1)} C ${(outerMidX + 6).toFixed(1)} ${(outerMidY - 82).toFixed(1)}, ${(outerMidX + 12).toFixed(1)} ${(outerMidY + 82).toFixed(1)}, ${cornerBotX.toFixed(1)} ${cornerBotY.toFixed(1)} C ${(cornerBotX - 42).toFixed(1)} ${(cornerBotY + 12).toFixed(1)}, ${(botMidX + 38).toFixed(1)} ${(botMidY + 12).toFixed(1)}, ${botMidX.toFixed(1)} ${botMidY.toFixed(1)} C ${(botMidX - 44).toFixed(1)} ${(botMidY - 14).toFixed(1)}, ${(hemInnerX + 36).toFixed(1)} ${(hemInnerY + 12).toFixed(1)}, ${hemInnerX.toFixed(1)} ${hemInnerY.toFixed(1)} C ${(hemInnerX - 42).toFixed(1)} ${(hemInnerY - 52).toFixed(1)}, 482 706, 456 644 L 516 264 Z`;
+
+          s.heroCapeClipPath?.setAttribute('d', mainD);
+          s.heroCapeMain?.setAttribute('d', mainD);
+          s.heroCapeWeave?.setAttribute('d', mainD);
+
+          // Soft paper fold shadow valleys & sunlit cotton crease over the draped sheet
+          s.heroCapePleatA?.setAttribute(
+            'd',
+            `M ${(topAnchorX + 16).toFixed(1)} ${(topAnchorY + 24).toFixed(1)} C ${(topAnchorX + 54 * reach).toFixed(1)} ${(352 + w1 * 0.4).toFixed(1)}, ${(botMidX + 10).toFixed(1)} ${(548 + w2 * 0.4).toFixed(1)}, ${botMidX.toFixed(1)} ${botMidY.toFixed(1)} C ${(botMidX - 38).toFixed(1)} ${(botMidY - 12).toFixed(1)}, ${(hemInnerX + 36).toFixed(1)} ${(hemInnerY + 4).toFixed(1)}, ${(hemInnerX + 16).toFixed(1)} ${(hemInnerY - 14).toFixed(1)} C ${(hemInnerX + 10).toFixed(1)} ${(534 + w1 * 0.28).toFixed(1)}, ${(topAnchorX + 26 * reach).toFixed(1)} 348, ${(topAnchorX + 16).toFixed(1)} ${(topAnchorY + 24).toFixed(1)} Z`
+          );
+
+          s.heroCapePleatB?.setAttribute(
+            'd',
+            `M ${midBackX.toFixed(1)} ${(midBackY + 18).toFixed(1)} C ${(midBackX + 78 * reach).toFixed(1)} ${(368 + w1 * 0.48).toFixed(1)}, ${(outerMidX - 34).toFixed(1)} ${(528 + w2 * 0.45).toFixed(1)}, ${(cornerBotX - 20).toFixed(1)} ${(cornerBotY - 10).toFixed(1)} C ${(cornerBotX - 38).toFixed(1)} ${(cornerBotY + 2).toFixed(1)}, ${(botMidX + 38).toFixed(1)} ${(botMidY + 4).toFixed(1)}, ${(botMidX + 16).toFixed(1)} ${(botMidY - 22).toFixed(1)} C ${(outerMidX - 58).toFixed(1)} ${(514 + w2 * 0.32).toFixed(1)}, ${(midBackX + 38 * reach).toFixed(1)} 348, ${midBackX.toFixed(1)} ${(midBackY + 18).toFixed(1)} Z`
+          );
+
+          s.heroCapeFold?.setAttribute(
+            'd',
+            `M ${(topAnchorX + 32).toFixed(1)} ${(topAnchorY + 34).toFixed(1)} C ${(topCtrl2X - 18).toFixed(1)} ${(topCtrl2Y + 115 + w1 * 0.36).toFixed(1)}, ${(outerMidX - 44).toFixed(1)} ${(outerMidY + 28 + w2 * 0.4).toFixed(1)}, ${(cornerBotX - 42).toFixed(1)} ${(cornerBotY - 44).toFixed(1)}`
+          );
+
+          // Crisp outer dark intaglio note border & inner engraved framing rule
+          s.heroCapeEdgeInk?.setAttribute('d', mainD);
+          const trimBorderD = `M ${(topAnchorX + 16).toFixed(1)} ${(topAnchorY + 16).toFixed(1)} C ${topCtrl1X.toFixed(1)} ${(topCtrl1Y + 12).toFixed(1)}, ${topCtrl2X.toFixed(1)} ${(topCtrl2Y + 12).toFixed(1)}, ${(cornerTopX - 10).toFixed(1)} ${(cornerTopY + 10).toFixed(1)} C ${(outerMidX - 4).toFixed(1)} ${(outerMidY - 78).toFixed(1)}, ${(outerMidX + 2).toFixed(1)} ${(outerMidY + 78).toFixed(1)}, ${(cornerBotX - 12).toFixed(1)} ${(cornerBotY - 10).toFixed(1)} C ${(cornerBotX - 44).toFixed(1)} ${(cornerBotY + 2).toFixed(1)}, ${(botMidX + 38).toFixed(1)} ${(botMidY + 2).toFixed(1)}, ${botMidX.toFixed(1)} ${(botMidY - 10).toFixed(1)} C ${(botMidX - 42).toFixed(1)} ${(botMidY - 26).toFixed(1)}, ${(hemInnerX + 34).toFixed(1)} ${(hemInnerY + 4).toFixed(1)}, ${(hemInnerX + 10).toFixed(1)} ${(hemInnerY - 10).toFixed(1)}`;
+          s.heroCapeTrim?.setAttribute('d', trimBorderD);
+          s.heroCapeGuilloche?.setAttribute('d', trimBorderD);
+
+          // Scale & project the engraved $1 Federal Reserve Note cleanly inside the draped bill panel
+          if (s.heroCapeEmblem) {
+            const panelW = Math.max(130, cornerTopX - midBackX);
+            const panelH = Math.max(260, cornerBotY - cornerTopY);
+            const billCenterX = (midBackX + 54 * reach) * 0.36 + (outerMidX - 30) * 0.34 + (botMidX + 12) * 0.30;
+            const billCenterY = (cornerTopY + cornerBotY) * 0.5 + 16;
+            const billTilt = 14 - billowLift * 14 + (w2 - w1) * 0.32;
+            const billSkew = (w3 - w2) * 0.28;
+            const noteScaleX = Math.max(0.56, Math.min(0.98, panelW / 245)) * (1 - Math.abs(w2) * 0.0025);
+            const noteScaleY = Math.max(0.66, Math.min(1.0, panelH / 445));
+            s.heroCapeEmblem.setAttribute(
+              'transform',
+              `translate(${billCenterX.toFixed(1)} ${billCenterY.toFixed(1)}) rotate(${billTilt.toFixed(1)}) skewY(${billSkew.toFixed(1)}) scale(${noteScaleX.toFixed(3)} ${noteScaleY.toFixed(3)})`
+            );
+          }
+
+          // Collar cowl & clasps ride along the deformed pauldrons / upper chest contour
+          s.heroCapeFront.setAttribute(
+            'transform',
+            `translate(${s.capeCollarDx.toFixed(1)} ${s.capeCollarDy.toFixed(1)})`
+          );
+
+          s.heroCapeBack.setAttribute('opacity', capeFade.toFixed(3));
+          s.heroCapeFront.setAttribute('opacity', (capeFade * Math.min(1, unfurl * 1.3)).toFixed(3));
+        } else {
+          s.heroCapeBack.setAttribute('opacity', '0');
+          s.heroCapeFront.setAttribute('opacity', '0');
+        }
       }
 
       const n = s.bossAction === 'BREAKING' ? 0 : s.nervousLevel;
@@ -3240,6 +4094,8 @@ export function PiggyDuelPlugin({
       const hurtShakeX = (s.hurtTimer > 0 ? Math.sin(s.hurtTimer * 55) * 12 * s.hurtDir : 0) + nervousTremorX;
 
       const climbTilt = airK * clampAbs(-s.vAlt * 0.022, 9);
+      const dollarLeanBack = s.dollarCinematic * (-7.5 + Math.sin(nowMs * 0.011) * 3.2);
+      const disguiseIdleRock = dg * Math.sin(nowMs * 0.0024) * 1.8;
       const bodyRotBase =
         (-2.2 * mm + 1.3 * mm * Math.sin(2 * s.phi)) * (1 - airK) +
         airK * (-12.5 * Math.min(mm, 1.7) / 1.7 + 1.8 * Math.sin(nowMs * 0.003)) +
@@ -3249,15 +4105,18 @@ export function PiggyDuelPlugin({
         vibR +
         strainJitter +
         dizzyBodyRot +
+        dollarLeanBack +
+        disguiseIdleRock +
         s.slotReceiveTilt;
-      const bodyRot = bodyRotBase * (1 - m) + s.ballAngle * m;
+      const bodyRot = bodyRotBase * (1 - m) * (1 - dg * 0.65) + s.ballAngle * m;
       const rBall = getBallSvgRadius(s.bellyLevel);
       const ballIdealDropY = 911 - (BALL_CY + rBall);
-      const ballPivotX = 550 * (1 - m) + BALL_CX * m;
-      const ballPivotY = 750 * (1 - m) + BALL_CY * m;
-      const ballDropY = dyN * (1 - m) + ballIdealDropY * m;
-      const bodySx = 1 + sx * (1 - m);
-      const bodySy = 1 - sq * (1 - m);
+      const disguiseDropY = 138;
+      const ballPivotX = 550 * (1 - shellM) + BALL_CX * shellM;
+      const ballPivotY = 750 * (1 - shellM) + BALL_CY * shellM;
+      const ballDropY = dyN * (1 - m) * (1 - dg) + ballIdealDropY * m + disguiseDropY * dg;
+      const bodySx = 1 + sx * (1 - shellM) * (1 - dg);
+      const bodySy = 1 - sq * (1 - shellM) * (1 - dg);
 
       // Elastic squash & stretch in ball mode (floor/wall impact + velocity elongation)
       const bSq = s.spBallSq.step(0, dt);
@@ -3393,6 +4252,8 @@ export function PiggyDuelPlugin({
           if (s.leftSocket) s.leftSocket.style.opacity = '0';
           if (s.rightSocket) s.rightSocket.style.opacity = '0';
           if (s.ballShellOverlay) s.ballShellOverlay.setAttribute('opacity', '0');
+          if (s.piggyShell) s.piggyShell.style.opacity = '0';
+          if (s.torsoMain) s.torsoMain.style.opacity = '1';
           if (s.la) s.la.style.opacity = '1';
           if (s.ra) s.ra.style.opacity = '1';
           if (s.tailMount) s.tailMount.style.opacity = '1';
@@ -3479,7 +4340,7 @@ export function PiggyDuelPlugin({
         s.actor?.setAttribute('transform', s.dir > 0 ? 'translate(1100 0) scale(-1 1)' : '');
         s.piggyPos?.setAttribute(
           'transform',
-          `translate(${(s.px + (s.bossAction === 'PATTERN_STOP' ? s.nervousJitterX : 0)).toFixed(1)} ${(FLOOR_Y + s.py).toFixed(1)}) scale(${PIGGY_SCALE.toFixed(3)}) translate(-550 -911)`
+          `translate(${(s.px + (s.bossAction === 'PATTERN_STOP' || s.bossAction === 'INTRO_TRANSFORM' ? s.nervousJitterX : 0)).toFixed(1)} ${(FLOOR_Y + s.py).toFixed(1)}) scale(${(PIGGY_SCALE * s.disguiseScale).toFixed(4)}) translate(-550 -911)`
         );
         if (s.piggyPos) {
           s.piggyPos.style.opacity = '1';
@@ -3512,7 +4373,7 @@ export function PiggyDuelPlugin({
         if (s.shadowEl) {
           const hf = Math.max(0.32, 1 - airAlt / 620);
           s.shadowEl.setAttribute('cx', s.px.toFixed(1));
-          s.shadowEl.setAttribute('rx', ((98 + s.bellyLevel * 38) * PIGGY_UNIT * hf).toFixed(1));
+          s.shadowEl.setAttribute('rx', ((98 + s.bellyLevel * 38) * PIGGY_UNIT * s.disguiseScale * hf).toFixed(1));
           s.shadowEl.setAttribute('fill', `rgba(45, 32, 18, ${(0.17 * hf).toFixed(3)})`);
         }
       }
@@ -3575,11 +4436,98 @@ export function PiggyDuelPlugin({
       }
     };
 
+    const spawnSpilledCoinsCascade = (
+      cx: number,
+      cy: number,
+      slotX: number,
+      slotY: number,
+      storedCoins: SwallowedCoinRecord[],
+      roundNum: number
+    ) => {
+      const s = simRef.current;
+      const totalTarget = Math.min(72, Math.max(46, 38 + storedCoins.length * 4 + roundNum * 4));
+      const storedCount = storedCoins.length;
+
+      for (let i = 0; i < totalTarget; i++) {
+        const isPlayerStored = i < storedCount;
+        const storedRec = isPlayerStored ? storedCoins[i] : null;
+        const baseR = storedRec ? storedRec.r : 20 + Math.random() * 4.5;
+        const coinPwr = storedRec ? storedRec.power : Math.random() < 0.16 ? 0.8 : 0;
+
+        // 3 dramatic eruption waves:
+        // Wave 0 (~14%): pressurised coins pop straight out of the chest slot slit before core blast
+        // Wave 1 (~56%): massive golden coin volcano on Beat 2 Core Detonation (0.36s)
+        // Wave 2 (~30%): secondary upward fountain on Beat 3 Inner Boiler Burst (0.98s)
+        const wave = i < 6 ? 0 : i < Math.round(totalTarget * 0.68) ? 1 : 2;
+
+        let spawnX = cx;
+        let spawnY = cy;
+        let vx = 0;
+        let vy = 0;
+        let delay = 0;
+
+        if (wave === 0) {
+          spawnX = slotX + (Math.random() - 0.5) * 18;
+          spawnY = slotY - 6;
+          const spread = (Math.random() - 0.5) * 290;
+          vx = spread;
+          vy = -(460 + Math.random() * 280);
+          delay = 0.05 + (i / 6) * 0.24;
+        } else if (wave === 1) {
+          // Fan evenly across a lush golden parabola so coins fill the sky beautifully
+          const waveCount = Math.max(1, Math.round(totalTarget * 0.68) - 6);
+          const idxInWave = i - 6;
+          const norm = waveCount > 1 ? idxInWave / (waveCount - 1) : 0.5;
+          const fanAngle = -Math.PI * (0.14 + norm * 0.72) + (Math.random() - 0.5) * 0.16;
+          const speed = 640 + Math.random() * 540;
+          spawnX = cx + (Math.random() - 0.5) * 44;
+          spawnY = cy + (Math.random() - 0.5) * 32;
+          vx = Math.cos(fanAngle) * speed * (0.85 + Math.random() * 0.35);
+          vy = Math.sin(fanAngle) * speed - 180;
+          delay = 0.35 + Math.random() * 0.16;
+        } else {
+          const waveCount = Math.max(1, totalTarget - Math.round(totalTarget * 0.68));
+          const idxInWave = i - Math.round(totalTarget * 0.68);
+          const norm = waveCount > 1 ? idxInWave / (waveCount - 1) : 0.5;
+          const fanAngle = -Math.PI * (0.18 + norm * 0.64) + (Math.random() - 0.5) * 0.2;
+          const speed = 560 + Math.random() * 460;
+          spawnX = cx + (Math.random() - 0.5) * 36;
+          spawnY = cy - 10 + (Math.random() - 0.5) * 24;
+          vx = Math.cos(fanAngle) * speed;
+          vy = Math.sin(fanAngle) * speed - 140;
+          delay = 0.96 + Math.random() * 0.22;
+        }
+
+        s.spilledCoins.push({
+          x: spawnX,
+          y: spawnY,
+          vx,
+          vy,
+          r: baseR,
+          rot: Math.random() * 360,
+          vrot: (Math.random() < 0.5 ? -1 : 1) * (420 + Math.random() * 680),
+          flipPhase: Math.random() * Math.PI * 2,
+          flipSpeed: 7.5 + Math.random() * 9.5,
+          power: coinPwr,
+          isPlayerStored,
+          delay,
+          wave,
+          life: 2.9 + Math.random() * 0.75,
+          maxLife: 3.65,
+          bounces: 0,
+          gravity: 1360 + Math.random() * 240,
+          trail: [],
+          glintPhase: Math.random() * Math.PI * 2,
+        });
+      }
+    };
+
     const advanceToNextPatternSpot = (skipBallTrigger = false) => {
       const s = simRef.current;
       const n = s.nervousLevel;
       s.nervousJitterX = 0;
       s.stopsSinceBall += 1;
+      s.stopsSinceDollar += 1;
       const surprisePanicBall = n > 0.62 && Math.random() < 0.34;
       if (!skipBallTrigger && (s.stopsSinceBall >= s.ballTriggerStops || surprisePanicBall)) {
         s.stopsSinceBall = 0;
@@ -3598,6 +4546,39 @@ export function PiggyDuelPlugin({
         s.bellyVel += 0.22 + n * 0.12;
         spawnCollisionFx(s.px, FLOOR_Y + s.py - 85, 0, -1, n > 0.45 ? '#EF4444' : '#F59E0B', true);
         synthRef.current?.playBallBoing(1.15 + n * 0.2);
+        return;
+      }
+
+      // Dedicated Cinematic Cash Barrage & Slot Lockdown state
+      if (!skipBallTrigger && s.stopsSinceDollar >= s.dollarTriggerStops) {
+        s.stopsSinceDollar = 0;
+        s.dollarTriggerStops = s.difficulty === 'FRENZY' ? 2 : 2 + (s.round % 2);
+        s.bossAction = 'DOLLAR_BARRAGE';
+        s.dollarDuration = (s.difficulty === 'FRENZY' ? 2.9 : 3.2) + Math.min(0.6, (s.round - 1) * 0.12);
+        s.dollarTimer = s.dollarDuration;
+        s.dollarBurstAcc = 0.26;
+        s.dollarWaveCount = 0;
+        s.walkM = 0;
+        s.dir = s.cx >= s.px ? 1 : -1;
+        s.bellyVel += 0.18;
+        s.spSq.v += 1.4;
+        s.spLa.v -= 28;
+        s.spRa.v += 28;
+        s.shakeTimer = Math.max(s.shakeTimer, 0.12);
+        const curSlot = getSlotHolePos();
+        s.shockwaves.push({
+          x: curSlot.x,
+          y: curSlot.y,
+          r: 14,
+          maxR: 130,
+          life: 0.42,
+          maxLife: 0.42,
+          color: '#22C55E',
+          lineWidth: 3.5,
+        });
+        spawnMoneyHurtFx(curSlot.x, curSlot.y - 12, 8, 280);
+        spawnFloater(s.px, FLOOR_Y + s.py - 165, 'SLOT SEALED · CASH BARRAGE!', '#15803D', 22);
+        synthRef.current?.playDollarBarrageStart();
         return;
       }
 
@@ -3652,9 +4633,16 @@ export function PiggyDuelPlugin({
     };
 
     // Progressive 3-in-a-Row Pump + Money-Hurt Reaction every time a coin drops inside!
-    const receiveCoinInSlot = (coinX: number, coinY: number, amount: number, isSlotDirect: boolean, coinPower = 0) => {
+    const receiveCoinInSlot = (
+      coinX: number,
+      coinY: number,
+      amount: number,
+      isSlotDirect: boolean,
+      coinPower = 0,
+      coinRadius = 21
+    ) => {
       const s = simRef.current;
-      if (s.bossAction === 'BREAKING') return;
+      if (s.bossAction === 'BREAKING' || s.bossAction === 'INTRO_TRANSFORM') return;
 
       const piggyCenterY = FLOOR_Y + s.py + (545 + 46 * s.ballMorph - 911) * PIGGY_SCALE;
 
@@ -3664,6 +4652,7 @@ export function PiggyDuelPlugin({
           s.pumpProgress = Math.min(s.pumpTarget, s.pumpProgress + Math.max(1, Math.round(amount)));
           s.combo += 1;
           s.slotDrops += 1;
+          s.swallowedCoins.push({ r: coinRadius, power: coinPower });
           s.sinceLastSlotHit = 0;
           s.pumpHoldTimer = s.pumpHoldMax + coinPower * 1.1;
 
@@ -3731,7 +4720,24 @@ export function PiggyDuelPlugin({
       s.spRa.v += isSlotDirect ? 24 : 10;
       s.spTail.v += isSlotDirect ? 34 : 14;
       s.hitStop = isSlotDirect ? 0.025 : 0;
-      s.shakeTimer = Math.max(s.shakeTimer, isSlotDirect ? 0.12 : 0.03);
+      const comboBoost = 1 - Math.exp(-Math.max(0, s.combo) * 0.24);
+      s.shakeTimer = Math.max(
+        s.shakeTimer,
+        (isSlotDirect ? 0.12 : 0.03) + comboBoost * (isSlotDirect ? 0.065 : 0.025)
+      );
+
+      // Screen-layer hit impact & combo damage pulse
+      const coinHitIntensity = isSlotDirect
+        ? Math.min(1.18, 0.38 + comboBoost * 0.64 + Math.min(0.2, coinPower * 0.22))
+        : Math.min(0.62, 0.16 + comboBoost * 0.36);
+      s.screenHitMax = isSlotDirect ? 0.34 + comboBoost * 0.12 : 0.2 + comboBoost * 0.06;
+      s.screenHitTimer = s.screenHitMax;
+      s.screenHitIntensity = coinHitIntensity;
+      s.screenHitIsDirect = isSlotDirect;
+      s.screenHitIsBreak = false;
+      s.screenHitX = coinX;
+      s.screenHitY = coinY;
+      s.screenHitCombo = s.combo;
 
       // 3. Money Hurt Particles ($ signs + bills on slot hit, muted brass clank on armor graze)
       if (isSlotDirect) {
@@ -3742,11 +4748,11 @@ export function PiggyDuelPlugin({
         synthRef.current?.playArmorClank();
       }
 
-      // 4. Did it pump enough to BREAK?! -> Launch Heavy Premium Mechanical Disassembly!
+      // 4. Did it pump enough to BREAK?! -> Launch Heavy Premium Mechanical Disassembly & Coin Eruption!
       if (s.phase === 'PLAYING' && s.pumpProgress >= s.pumpTarget) {
         s.bossAction = 'BREAKING';
-        s.breakMax = 2.75;
-        s.breakTimer = 2.75;
+        s.breakMax = 3.55;
+        s.breakTimer = 3.55;
         s.breakStage = 0;
         s.breakPx = s.px;
         s.breakPy = s.py;
@@ -3757,6 +4763,24 @@ export function PiggyDuelPlugin({
         s.projectiles = [];
         s.hitStop = 0.095;
         s.shakeTimer = 0.38;
+        s.screenHitMax = 0.58;
+        s.screenHitTimer = 0.58;
+        s.screenHitIntensity = Math.min(1.38, 0.94 + comboBoost * 0.44);
+        s.screenHitIsDirect = true;
+        s.screenHitIsBreak = true;
+        s.screenHitX = coinX;
+        s.screenHitY = coinY;
+        s.screenHitCombo = s.combo;
+        const slotWorldPos = getSlotHolePos();
+        spawnSpilledCoinsCascade(
+          s.breakPx,
+          piggyCenterY,
+          slotWorldPos.x,
+          slotWorldPos.y,
+          s.swallowedCoins,
+          s.round
+        );
+        s.swallowedCoins = [];
         const dirSign = s.breakDir > 0 ? -1 : 1;
         const mkPart = (
           id: string,
@@ -3868,6 +4892,20 @@ export function PiggyDuelPlugin({
         if (s.bossFlash > 0) s.bossFlash = Math.max(0, s.bossFlash - rawDt);
         if (s.hurtTimer > 0) s.hurtTimer = Math.max(0, s.hurtTimer - rawDt);
         if (s.shakeTimer > 0) s.shakeTimer = Math.max(0, s.shakeTimer - rawDt);
+        if (s.screenHitTimer > 0) s.screenHitTimer = Math.max(0, s.screenHitTimer - rawDt);
+        if (s.heroCapeTimer > 0 && s.phase === 'PLAYING') {
+          s.heroCapeTimer = s.bossAction === 'BREAKING' ? 0 : Math.max(0, s.heroCapeTimer - rawDt);
+        }
+        const targetCapeAlpha =
+          s.phase === 'PLAYING' && s.bossAction !== 'BREAKING' && s.heroCapeTimer > 0
+            ? Math.min(1, s.heroCapeTimer / 0.42)
+            : 0;
+        s.heroCapeAlpha += (targetCapeAlpha - s.heroCapeAlpha) * (1 - Math.exp(-16 * rawDt));
+        const targetComboAura =
+          s.phase === 'PLAYING' && s.combo >= 2
+            ? Math.min(1, 1 - Math.exp(-Math.max(0, s.combo - 1) * 0.25))
+            : 0;
+        s.screenComboAura += (targetComboAura - s.screenComboAura) * (1 - Math.exp(-5.5 * rawDt));
         if (s.swallowTimer > 0) s.swallowTimer = Math.max(0, s.swallowTimer - rawDt);
         if (s.slotGlowTimer > 0) s.slotGlowTimer = Math.max(0, s.slotGlowTimer - rawDt);
         if (s.nervousPanicTimer > 0) s.nervousPanicTimer = Math.max(0, s.nervousPanicTimer - rawDt);
@@ -3894,10 +4932,10 @@ export function PiggyDuelPlugin({
           (targetNervous - s.nervousLevel) *
           Math.min(1, rawDt * (targetNervous > s.nervousLevel ? 6.5 : 2.1));
 
-        // Smooth cylinder rotation per fired chamber & threshold reload sweep
+        // Smooth cylinder rotation per fired chamber & threshold reload sweep (1.85x faster reload under UZZI!)
         s.cylinderAngle += (s.cylinderTargetAngle - s.cylinderAngle) * Math.min(1, rawDt * 22);
         if (s.isReloading) {
-          s.reloadTimer += rawDt;
+          s.reloadTimer += rawDt * (s.uzziBuffTimer > 0 ? 1.85 : 1);
           const reloadFrac = Math.min(1, s.reloadTimer / s.reloadDuration);
           const nextStep = Math.floor(reloadFrac * s.revolverMax);
           if (nextStep > s.reloadSoundStep && nextStep < s.revolverMax) {
@@ -3915,10 +4953,45 @@ export function PiggyDuelPlugin({
           }
         }
 
+        // UZZI Full-Magazine Rapid-Fire Burst Queue (unloads all remaining claimed coins on 1 release!)
+        if (s.uzziBurstRemaining > 0) {
+          if (s.bossAction === 'BREAKING' || s.isReloading || s.revolverChambers <= 0) {
+            s.uzziBurstRemaining = 0;
+          } else {
+            s.uzziBurstTimer -= rawDt;
+            while (s.uzziBurstTimer <= 0 && s.uzziBurstRemaining > 0 && s.revolverChambers > 0 && !s.isReloading) {
+              s.uzziBurstTimer += 0.048;
+              const shotIdx = s.uzziBurstFired;
+              const spreadSign = shotIdx % 2 === 0 ? 1 : -1;
+              const spreadRing = Math.ceil(shotIdx / 2);
+              const spreadRad = spreadSign * 0.022 * Math.min(2.2, spreadRing);
+              s.handCharge = s.uzziBurstCharge;
+              const fired = throwCoin(false, s.uzziBurstCharge, {
+                bypassCooldown: true,
+                spreadRad,
+                velocityBoost: 1.16,
+                uziShot: true,
+              });
+              s.handCharge = 0;
+              if (!fired) {
+                s.uzziBurstRemaining = 0;
+                break;
+              }
+              s.uzziBurstRemaining -= 1;
+              s.uzziBurstFired += 1;
+              s.handOffsetX -= s.facing * 2.4;
+              s.handOffsetY -= 2.2;
+              s.handTiltDeg = -s.facing * (7 + (shotIdx % 3) * 2.5);
+            }
+          }
+        }
+
         // Tap-Hop, Hold-Charge Power Meter, Low-to-Top Laser Climb & Progressive Tap-Grow Physics
         if (s.laserIgniteFlash > 0) {
           s.laserIgniteFlash = Math.max(0, s.laserIgniteFlash - rawDt * 6.5);
         }
+        const damp14 = 1 - Math.exp(-14 * rawDt);
+        const damp18 = 1 - Math.exp(-18 * rawDt);
         if (s.handHoldActive && (s.phase === 'PLAYING' || s.phase === 'TITLE_MENU')) {
           s.handHoldDuration += rawDt;
           s.laserGrow = Math.min(1, s.handHoldDuration / 0.85);
@@ -3939,32 +5012,32 @@ export function PiggyDuelPlugin({
               synthRef.current?.playChargeTick(nextStep);
             }
           }
-          // Pull back & tense slightly along aim vector while charging
+          // Pull back & tense sleekly along aim vector while charging
           const aimState = getSlingLaunchState();
-          const pullMag = 14 * Math.max(s.handCharge, s.laserElev * 0.45);
-          const pullTargetX = -Math.cos(aimState.launchAngle) * pullMag + (s.handCharge > 0.7 ? Math.sin(now * 0.08) * 2.2 * s.handCharge : 0);
-          const pullTargetY = -Math.sin(aimState.launchAngle) * pullMag + (s.handCharge > 0.7 ? Math.cos(now * 0.09) * 2.2 * s.handCharge : 0);
-          s.handOffsetX += (pullTargetX - s.handOffsetX) * Math.min(1, rawDt * 18);
-          s.handOffsetY += (pullTargetY - s.handOffsetY) * Math.min(1, rawDt * 18);
-          s.handScaleX += (1 + 0.14 * s.handCharge - s.handScaleX) * Math.min(1, rawDt * 14);
-          s.handScaleY += (1 - 0.14 * s.handCharge - s.handScaleY) * Math.min(1, rawDt * 14);
-          s.handTiltDeg += (-s.facing * 24 * s.handCharge - s.handTiltDeg) * Math.min(1, rawDt * 14);
+          const pullMag = 12 * Math.max(s.handCharge, s.laserElev * 0.42);
+          const pullTargetX = -Math.cos(aimState.launchAngle) * pullMag + (s.handCharge > 0.72 ? Math.sin(now * 0.075) * 1.4 * s.handCharge : 0);
+          const pullTargetY = -Math.sin(aimState.launchAngle) * pullMag + (s.handCharge > 0.72 ? Math.cos(now * 0.085) * 1.4 * s.handCharge : 0);
+          s.handOffsetX += (pullTargetX - s.handOffsetX) * damp18;
+          s.handOffsetY += (pullTargetY - s.handOffsetY) * damp18;
+          s.handScaleX += (1 + 0.1 * s.handCharge - s.handScaleX) * damp14;
+          s.handScaleY += (1 - 0.1 * s.handCharge - s.handScaleY) * damp14;
+          s.handTiltDeg += (-s.facing * 20 * s.handCharge - s.handTiltDeg) * damp14;
 
           if (s.handCharge > 0.15) {
             s.handChargeTrailAcc += rawDt;
-            if (s.handChargeTrailAcc >= 0.05) {
+            if (s.handChargeTrailAcc >= 0.055) {
               s.handChargeTrailAcc = 0;
               const ang = Math.random() * Math.PI * 2;
-              const rad = 46 - s.handCharge * 18;
+              const rad = 40 - s.handCharge * 15;
               s.particles.push({
                 x: s.cx + s.handOffsetX + Math.cos(ang) * rad,
                 y: s.cy + s.handHopY + s.handOffsetY + Math.sin(ang) * rad,
-                vx: -Math.cos(ang) * 95,
-                vy: -Math.sin(ang) * 95,
-                r: 2.2 + s.handCharge * 1.4,
+                vx: -Math.cos(ang) * 90,
+                vy: -Math.sin(ang) * 90,
+                r: 1.4 + s.handCharge * 0.9,
                 color: s.handCharge >= 0.78 ? 'rgba(253, 224, 71, 0.85)' : 'rgba(56, 189, 248, 0.78)',
-                life: 0.22,
-                maxLife: 0.22,
+                life: 0.2,
+                maxLife: 0.2,
                 gravity: 0,
                 kind: 'gleam',
                 rot: Math.random() * 90,
@@ -3981,14 +5054,14 @@ export function PiggyDuelPlugin({
               s.laserGrow = 0;
             }
           } else {
-            s.laserElev += (0 - s.laserElev) * Math.min(1, rawDt * 12);
+            s.laserElev += (0 - s.laserElev) * (1 - Math.exp(-12 * rawDt));
             if (s.laserElev < 0.002) s.laserElev = 0;
             s.laserGrow = 0;
           }
-          s.handOffsetX += (0 - s.handOffsetX) * Math.min(1, rawDt * 14);
-          s.handOffsetY += (0 - s.handOffsetY) * Math.min(1, rawDt * 14);
-          s.handScaleX += (1 - s.handScaleX) * Math.min(1, rawDt * 14);
-          s.handScaleY += (1 - s.handScaleY) * Math.min(1, rawDt * 14);
+          s.handOffsetX += (0 - s.handOffsetX) * damp14;
+          s.handOffsetY += (0 - s.handOffsetY) * damp14;
+          s.handScaleX += (1 - s.handScaleX) * damp14;
+          s.handScaleY += (1 - s.handScaleY) * damp14;
         }
 
         // Quick-tap vertical hop physics
@@ -4000,8 +5073,8 @@ export function PiggyDuelPlugin({
             s.handHopY = 0;
             s.handHopVy = 0;
             if (impactSpd > 140) {
-              s.handScaleX = 1.18;
-              s.handScaleY = 0.84;
+              s.handScaleX = 1.12;
+              s.handScaleY = 0.89;
             }
           }
         }
@@ -4011,50 +5084,82 @@ export function PiggyDuelPlugin({
         if (s.handShieldFlash > 0) s.handShieldFlash = Math.max(0, s.handShieldFlash - rawDt);
         s.handScrapeFxAcc += rawDt;
 
-        // Extended glide + dash-hold air glide + collision-safe hand movement
+        // Silky spring-damped pointer follow + dash + air glide + collision-safe hand movement
         let nextHandX = s.cx;
         let nextHandY = s.cy;
         if (s.dashTimer > 0) {
           s.dashTimer = Math.max(0, s.dashTimer - rawDt);
           nextHandX = s.cx + s.dashVx * rawDt;
           nextHandY = s.cy + s.dashVy * rawDt;
-          s.afterimages.push({ x: s.cx, y: s.cy + s.handHopY, life: 0.18, maxLife: 0.18 });
+          const dashAng = Math.atan2(s.dashVy, s.dashVx);
+          s.afterimages.push({
+            x: s.cx,
+            y: s.cy + s.handHopY,
+            life: 0.16,
+            maxLife: 0.16,
+            ang: dashAng,
+            speed: Math.hypot(s.dashVx, s.dashVy),
+            isDash: true,
+          });
           if (s.dashTimer <= 0 && s.dashHolding && s.dashGlideFuel > 0) {
-            s.handGlideTimer = Math.max(s.handGlideTimer, 0.2);
-            s.handGlideVx = s.dashVx * 0.34;
-            s.handGlideVy = s.dashVy * 0.34;
+            s.handGlideTimer = Math.max(s.handGlideTimer, 0.22);
+            s.handGlideVx = s.dashVx * 0.36;
+            s.handGlideVy = s.dashVy * 0.36;
           }
         } else if (s.dashHolding && s.dashGlideFuel > 0 && s.phase === 'PLAYING') {
           s.dashGlideFuel = Math.max(0, s.dashGlideFuel - rawDt);
           s.handGlideTimer = Math.max(s.handGlideTimer, 0.12);
-          nextHandX = s.cx + (s.targetCx - s.cx) * Math.min(1, rawDt * 12) + s.handGlideVx * rawDt * 0.35;
-          nextHandY = s.cy + (s.targetCy - s.cy) * Math.min(1, rawDt * 12) + s.handGlideVy * rawDt * 0.35;
-          s.handGlideVx *= Math.max(0, 1 - rawDt * 2.5);
-          s.handGlideVy *= Math.max(0, 1 - rawDt * 2.5);
-          s.afterimages.push({ x: s.cx, y: s.cy + s.handHopY, life: 0.22, maxLife: 0.22 });
+          const glideFollow = 1 - Math.exp(-14 * rawDt);
+          nextHandX = s.cx + (s.targetCx - s.cx) * glideFollow + s.handGlideVx * rawDt * 0.34;
+          nextHandY = s.cy + (s.targetCy - s.cy) * glideFollow + s.handGlideVy * rawDt * 0.34;
+          const gDamp = Math.exp(-2.6 * rawDt);
+          s.handGlideVx *= gDamp;
+          s.handGlideVy *= gDamp;
+          s.afterimages.push({
+            x: s.cx,
+            y: s.cy + s.handHopY,
+            life: 0.18,
+            maxLife: 0.18,
+            ang: Math.atan2(s.velY, s.velX),
+            speed: Math.hypot(s.velX, s.velY),
+            isDash: false,
+          });
         } else if (s.handGlideTimer > 0) {
           s.handGlideTimer = Math.max(0, s.handGlideTimer - rawDt);
-          nextHandX = s.cx + (s.targetCx - s.cx) * Math.min(1, rawDt * 13) + s.handGlideVx * rawDt * 0.22;
-          nextHandY = s.cy + (s.targetCy - s.cy) * Math.min(1, rawDt * 13) + s.handGlideVy * rawDt * 0.22;
-          s.handGlideVx *= Math.max(0, 1 - rawDt * 4.5);
-          s.handGlideVy *= Math.max(0, 1 - rawDt * 4.5);
-          if (Math.random() < 0.5) {
-            s.afterimages.push({ x: s.cx + s.handOffsetX, y: s.cy + s.handHopY + s.handOffsetY, life: 0.2, maxLife: 0.2 });
+          const glideFollow = 1 - Math.exp(-15 * rawDt);
+          nextHandX = s.cx + (s.targetCx - s.cx) * glideFollow + s.handGlideVx * rawDt * 0.22;
+          nextHandY = s.cy + (s.targetCy - s.cy) * glideFollow + s.handGlideVy * rawDt * 0.22;
+          const gDamp = Math.exp(-4.6 * rawDt);
+          s.handGlideVx *= gDamp;
+          s.handGlideVy *= gDamp;
+          if (Math.random() < 0.45) {
+            s.afterimages.push({
+              x: s.cx + s.handOffsetX,
+              y: s.cy + s.handHopY + s.handOffsetY,
+              life: 0.16,
+              maxLife: 0.16,
+              ang: Math.atan2(s.velY, s.velX),
+              speed: Math.hypot(s.velX, s.velY),
+              isDash: false,
+            });
           }
         } else if (s.handHoldActive) {
           // Focus-glide smoothing while holding & charging power meter
-          const glideTrackRate = 24 - s.handCharge * 11;
-          nextHandX = s.cx + (s.targetCx - s.cx) * Math.min(1, rawDt * glideTrackRate);
-          nextHandY = s.cy + (s.targetCy - s.cy) * Math.min(1, rawDt * glideTrackRate);
+          const glideTrackRate = 26 - s.handCharge * 12;
+          const trackAlpha = 1 - Math.exp(-glideTrackRate * rawDt);
+          nextHandX = s.cx + (s.targetCx - s.cx) * trackAlpha;
+          nextHandY = s.cy + (s.targetCy - s.cy) * trackAlpha;
         } else {
-          nextHandX = s.targetCx;
-          nextHandY = s.targetCy;
+          // Ultra-responsive spring-damped follow (zero polling stair-step jitter)
+          const followAlpha = 1 - Math.exp(-44 * rawDt);
+          nextHandX = s.cx + (s.targetCx - s.cx) * followAlpha;
+          nextHandY = s.cy + (s.targetCy - s.cy) * followAlpha;
         }
 
         if (Math.abs(s.handBounceVx) > 2 || Math.abs(s.handBounceVy) > 2) {
           nextHandX += s.handBounceVx * rawDt;
           nextHandY += s.handBounceVy * rawDt;
-          const bDamp = Math.max(0, 1 - rawDt * 14);
+          const bDamp = Math.exp(-14 * rawDt);
           s.handBounceVx *= bDamp;
           s.handBounceVy *= bDamp;
         } else {
@@ -4065,15 +5170,44 @@ export function PiggyDuelPlugin({
 
         const cDx = s.cx - s.prevCx;
         const cDy = s.cy - s.prevCy;
-        s.velX = cDx / Math.max(rawDt, 0.001);
-        const cSpeed = Math.hypot(cDx, cDy) / Math.max(rawDt, 0.001);
+        const rawVx = cDx / Math.max(rawDt, 0.001);
+        const rawVy = cDy / Math.max(rawDt, 0.001);
+        const velSmooth = 1 - Math.exp(-24 * rawDt);
+        s.velX += (rawVx - s.velX) * velSmooth;
+        s.velY += (rawVy - s.velY) * velSmooth;
+        const cSpeed = Math.hypot(s.velX, s.velY);
         s.prevCx = s.cx;
         s.prevCy = s.cy;
 
-        // Smooth velocity-banked tilt when not charging
+        // Subtle weightless hover float when poised + sleek aerodynamic velocity banking
+        const calmFactor = 1 - Math.min(1, cSpeed / 280);
+        const targetHover = s.handHoldActive ? 0 : Math.sin(now * 0.0046) * 2.1 * calmFactor;
+        s.handHoverY += (targetHover - s.handHoverY) * (1 - Math.exp(-10 * rawDt));
+
         if (!s.handHoldActive) {
-          const bankTarget = Math.max(-18, Math.min(18, s.velX * 0.012));
-          s.handTiltDeg += (bankTarget - s.handTiltDeg) * Math.min(1, rawDt * 12);
+          const bankTarget = Math.max(-19, Math.min(19, s.velX * 0.0115));
+          s.handTiltDeg += (bankTarget - s.handTiltDeg) * (1 - Math.exp(-15 * rawDt));
+          const speedStretch = Math.min(0.08, cSpeed / 3800);
+          s.handScaleX += (1 + speedStretch - s.handScaleX) * (1 - Math.exp(-14 * rawDt));
+          s.handScaleY += (1 - speedStretch * 0.65 - s.handScaleY) * (1 - Math.exp(-14 * rawDt));
+        }
+
+        // Sleek tapered kinetic slipstream trail when moving briskly, hopping, gliding, or dashing
+        s.handTrailAcc += rawDt;
+        const isFastMove = cSpeed > 240 || s.dashTimer > 0 || s.handGlideTimer > 0 || s.handHopY < -2;
+        if (isFastMove && s.handTrailAcc >= 0.009) {
+          s.handTrailAcc = 0;
+          s.handTrail.push({
+            x: s.cx + s.handOffsetX,
+            y: s.cy + s.handHopY + s.handHoverY + s.handOffsetY,
+            life: s.dashTimer > 0 ? 0.24 : 0.17,
+            maxLife: s.dashTimer > 0 ? 0.24 : 0.17,
+            isDash: s.dashTimer > 0 || s.handGlideTimer > 0,
+            speed: cSpeed,
+          });
+          if (s.handTrail.length > 26) {
+            s.handTrail.shift();
+          }
         }
 
         // Deterministic Varied Laser Profile Cycling (Zero random oscillation)
@@ -4115,11 +5249,40 @@ export function PiggyDuelPlugin({
           s.ballAngle += (0 - s.ballAngle) * Math.min(1, dt * 10);
         }
 
+        const targetDollarCin = s.bossAction === 'DOLLAR_BARRAGE' ? 1 : 0;
+        s.dollarCinematic += (targetDollarCin - s.dollarCinematic) * (1 - Math.exp(-8.5 * rawDt));
+
+        if (s.phase !== 'PLAYING') {
+          s.introCinematic += (0 - s.introCinematic) * (1 - Math.exp(-8.5 * rawDt));
+        }
+
         if (s.phase === 'PLAYING') {
           const pat = ROUND_PATTERNS[s.patternIndex % ROUND_PATTERNS.length];
 
+          // Dollar Cape shimmering mint-emerald & bullion-gold motes while flowing or dissolving at 4.0s
+          if (s.heroCapeTimer > 0 && s.bossAction !== 'BREAKING') {
+            const dissolving = s.heroCapeTimer < 0.45;
+            if (Math.random() < (dissolving ? 0.58 : 0.16)) {
+              s.particles.push({
+                x: s.px - s.dir * (48 + Math.random() * 88),
+                y: piggyCenterY + (Math.random() - 0.35) * 110,
+                vx: -s.dir * (55 + Math.random() * 95) + (Math.random() - 0.5) * 40,
+                vy: -25 - Math.random() * 65,
+                r: dissolving ? 3.2 + Math.random() * 2.2 : 2.3 + Math.random() * 1.6,
+                color: Math.random() < 0.45 ? '#FDE047' : Math.random() < 0.5 ? '#22C55E' : '#86EFAC',
+                life: 0.38,
+                maxLife: 0.38,
+                gravity: 60,
+                kind: 'gleam',
+                rot: Math.random() * 90,
+                vrot: 300,
+                drag: 2.6,
+              });
+            }
+          }
+
           // Periodic crimson warning steam & sparks when nervous
-          if (s.nervousLevel > 0.22 && s.bossAction !== 'BREAKING') {
+          if (s.nervousLevel > 0.22 && s.bossAction !== 'BREAKING' && s.bossAction !== 'INTRO_TRANSFORM') {
             s.bellyVel += Math.sin(now * 0.026) * 0.009 * s.nervousLevel;
             s.nervousSteamAcc += dt * (0.7 + s.nervousLevel * 1.8);
             if (s.nervousSteamAcc >= 0.34) {
@@ -4144,10 +5307,17 @@ export function PiggyDuelPlugin({
             }
           }
 
-          // Keep-Pumped Pressure Hold Countdown (drains slower in Bouncy Ball or during reload; vents & resets streak if it runs dry!)
-          if (s.bossAction !== 'BREAKING' && s.pumpProgress > 0) {
+          // Keep-Pumped Pressure Hold Countdown (drains slower in Bouncy Ball, Dollar Barrage lockdown, or during reload)
+          if (s.bossAction !== 'BREAKING' && s.bossAction !== 'INTRO_TRANSFORM' && s.pumpProgress > 0) {
             s.sinceLastSlotHit += dt;
-            const drainScale = s.bossAction === 'BOUNCY_BALL' ? 0.42 : s.isReloading ? 0.45 : 1.0;
+            const drainScale =
+              s.bossAction === 'DOLLAR_BARRAGE'
+                ? 0.22
+                : s.bossAction === 'BOUNCY_BALL'
+                ? 0.42
+                : s.isReloading
+                ? 0.45
+                : 1.0;
             s.pumpHoldTimer = Math.max(0, s.pumpHoldTimer - dt * drainScale);
 
             const holdRatio = s.pumpHoldMax > 0 ? Math.min(1, s.pumpHoldTimer / s.pumpHoldMax) : 0;
@@ -4211,7 +5381,7 @@ export function PiggyDuelPlugin({
               }
             }
 
-            // Beat 2 (0.36s): CORE DETONATION! Heavy hull plates & hardware blast outward
+            // Beat 2 (0.36s): CORE DETONATION! Heavy hull plates & hardware blast outward + Coin Fountain Geyser
             if (s.breakStage === 0 && elapsed >= 0.36) {
               s.breakStage = 1;
               s.shakeTimer = 0.48;
@@ -4221,44 +5391,131 @@ export function PiggyDuelPlugin({
                   x: s.breakPx,
                   y: piggyCenterY,
                   r: 28,
-                  maxR: 350,
-                  life: 0.44,
-                  maxLife: 0.44,
+                  maxR: 380,
+                  life: 0.48,
+                  maxLife: 0.48,
                   color: '#FEF08A',
-                  lineWidth: 12,
+                  lineWidth: 13,
                 },
                 {
                   x: s.breakPx,
                   y: piggyCenterY,
                   r: 18,
-                  maxR: 260,
-                  life: 0.36,
-                  maxLife: 0.36,
+                  maxR: 280,
+                  life: 0.38,
+                  maxLife: 0.38,
                   color: '#F59E0B',
-                  lineWidth: 6.5,
+                  lineWidth: 7,
                 }
               );
-              spawnMoneyHurtFx(s.breakPx, piggyCenterY, 26, 610);
-              spawnMechanicalDebris(s.breakPx, piggyCenterY, 34, 1.05, 'burst');
+              spawnMoneyHurtFx(s.breakPx, piggyCenterY, 24, 610);
+              spawnMechanicalDebris(s.breakPx, piggyCenterY, 32, 1.05, 'burst');
+              spawnFloater(s.breakPx, piggyCenterY - 125, 'JACKPOT SHOWER!', '#B45309', 26);
             }
 
-            // Beat 3 (0.98s): Exposed inner clockwork boiler core secondary burst
+            // Beat 3 (0.98s): Exposed inner clockwork boiler core secondary burst + Second Coin Surge
             if (s.breakStage === 1 && elapsed >= 0.98) {
               s.breakStage = 2;
-              s.shakeTimer = 0.28;
+              s.shakeTimer = 0.3;
               synthRef.current?.playCoreBurst();
               s.shockwaves.push({
                 x: s.breakPx,
                 y: piggyCenterY,
                 r: 20,
-                maxR: 270,
-                life: 0.38,
-                maxLife: 0.38,
+                maxR: 290,
+                life: 0.42,
+                maxLife: 0.42,
                 color: '#F97316',
                 lineWidth: 8.5,
               });
-              spawnMoneyHurtFx(s.breakPx, piggyCenterY, 22, 540);
-              spawnMechanicalDebris(s.breakPx, piggyCenterY, 24, 0.9, 'burst');
+              spawnMoneyHurtFx(s.breakPx, piggyCenterY, 20, 540);
+              spawnMechanicalDebris(s.breakPx, piggyCenterY, 22, 0.9, 'burst');
+            }
+
+            // Cinematic Spilled Coin Eruption & Floor Clinking Cascade (the same thrown coins bursting out!)
+            s.breakCoinSoundCooldown = Math.max(0, s.breakCoinSoundCooldown - dt);
+            for (let ci = s.spilledCoins.length - 1; ci >= 0; ci--) {
+              const sc = s.spilledCoins[ci];
+              if (sc.delay > 0) {
+                sc.delay -= dt;
+                if (sc.delay <= 0 && sc.wave === 0 && s.breakCoinSoundCooldown <= 0) {
+                  synthRef.current?.playCoinCascadeClink(1.18 + Math.random() * 0.2, 0.024);
+                  s.breakCoinSoundCooldown = 0.055;
+                }
+                continue;
+              }
+              sc.life -= dt;
+              if (sc.life <= 0) {
+                s.spilledCoins.splice(ci, 1);
+                continue;
+              }
+
+              // Record golden wake while moving rapidly through air
+              if (Math.hypot(sc.vx, sc.vy) > 220) {
+                sc.trail.push({ x: sc.x, y: sc.y });
+                if (sc.trail.length > 7) sc.trail.shift();
+              } else if (sc.trail.length > 0) {
+                sc.trail.shift();
+              }
+
+              sc.vy += sc.gravity * dt;
+              sc.vx *= Math.max(0, 1 - 0.14 * dt);
+              sc.x += sc.vx * dt;
+              sc.y += sc.vy * dt;
+              sc.rot += sc.vrot * dt;
+              sc.flipPhase += sc.flipSpeed * dt;
+              sc.glintPhase += dt * 9.5;
+
+              if (sc.x < MIN_X + 16) {
+                sc.x = MIN_X + 16;
+                sc.vx = Math.abs(sc.vx) * 0.68;
+                sc.vrot *= -0.7;
+              } else if (sc.x > MAX_X - 16) {
+                sc.x = MAX_X - 16;
+                sc.vx = -Math.abs(sc.vx) * 0.68;
+                sc.vrot *= -0.7;
+              }
+
+              const coinFloorY = FLOOR_Y - sc.r * 0.72;
+              if (sc.y >= coinFloorY && sc.vy > 0) {
+                sc.y = coinFloorY;
+                const impSpd = Math.abs(sc.vy);
+                if (impSpd > 115 && sc.bounces < 5) {
+                  sc.vy = -impSpd * (0.56 + Math.random() * 0.1);
+                  sc.vx *= 0.8;
+                  sc.vrot = (sc.vx >= 0 ? 1 : -1) * (280 + Math.random() * 380);
+                  sc.flipSpeed *= 0.84;
+                  sc.bounces += 1;
+
+                  if (impSpd > 210 && Math.random() < 0.45) {
+                    s.landingRings.push({
+                      x: sc.x,
+                      y: FLOOR_Y + 2,
+                      rx: sc.r * 0.35,
+                      maxRx: sc.r * 1.45,
+                      life: 0.2,
+                      maxLife: 0.2,
+                      color: 'rgba(245, 158, 11, 0.45)',
+                    });
+                    if (Math.random() < 0.5) {
+                      spawnDustPuff(sc.x, FLOOR_Y - 2, sc.vx >= 0 ? 1 : -1, 1, 80);
+                    }
+                  }
+                  if (impSpd > 150 && s.breakCoinSoundCooldown <= 0) {
+                    synthRef.current?.playCoinCascadeClink(0.92 + Math.random() * 0.42, Math.min(0.036, 0.016 + impSpd * 0.000022));
+                    s.breakCoinSoundCooldown = 0.038;
+                  }
+                } else {
+                  sc.vy = 0;
+                  sc.vx *= Math.max(0, 1 - dt * 5.2);
+                  sc.vrot *= Math.max(0, 1 - dt * 6.5);
+                  sc.flipSpeed *= Math.max(0, 1 - dt * 6.0);
+                  // Snap gently flat-ish once settled on ground
+                  if (Math.abs(sc.vx) < 25) {
+                    sc.flipPhase += (0 - Math.sin(sc.flipPhase)) * Math.min(1, dt * 8);
+                  }
+                }
+              }
             }
 
             // Heavy ballistic integration + floor slam weight, shock rings, sparks & skid friction
@@ -4369,11 +5626,192 @@ export function PiggyDuelPlugin({
               s.phase = 'WHITEPAPER';
               s.throwHolding = false;
               s.projectiles = [];
+              s.spilledCoins = [];
+              s.swallowedCoins = [];
               s.disassemblyParts = [];
               s.debrisItems = [];
               s.shockwaves = [];
               setWpTab('PDF');
               setPhase('WHITEPAPER');
+            }
+          } else if (s.bossAction === 'INTRO_TRANSFORM') {
+            s.introTimer = Math.max(0, s.introTimer - rawDt);
+            const elapsed = s.introDuration - s.introTimer;
+            const barIn = Math.min(1, elapsed / 0.26);
+            const barOut = s.introTimer < 0.42 ? Math.max(0, s.introTimer / 0.42) : 1;
+            s.introCinematic = barIn * barOut;
+            s.walkM = 0;
+
+            const easeOutCubic = (v: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, v)), 3);
+
+            // Beat 1 (0..0.68s): Tiny 0.34x tabletop piggybank shudders under theatrical spotlight
+            if (elapsed < 0.68) {
+              s.piggyDisguise = 1;
+              s.disguiseScale = 0.34;
+              s.goalAlt = 0;
+              const p1 = elapsed / 0.68;
+              s.nervousJitterX = Math.sin(now * 0.092) * (1.8 + p1 * 5.2);
+              s.bellyVel += Math.sin(now * 0.048) * 0.01;
+              s.slotGlowTimer = Math.max(s.slotGlowTimer, 0.28);
+              if (Math.random() < 0.4) {
+                s.particles.push({
+                  x: slotPos.x + (Math.random() - 0.5) * 14,
+                  y: slotPos.y - 4,
+                  vx: (Math.random() - 0.5) * 85,
+                  vy: -95 - Math.random() * 125,
+                  r: 2.2 + Math.random() * 2.0,
+                  color: Math.random() < 0.5 ? '#FEF08A' : '#F59E0B',
+                  life: 0.38,
+                  maxLife: 0.38,
+                  gravity: 130,
+                  kind: 'gleam',
+                  rot: Math.random() * 90,
+                  vrot: 260,
+                  drag: 2.4,
+                });
+              }
+            } else if (elapsed < 1.48) {
+              // Beat 2 (0.68..1.48s): Porcelain piggybank carapace splits along glowing seams & unfolds vertically into tall mech!
+              if (s.introStage === 0) {
+                s.introStage = 1;
+                s.shakeTimer = Math.max(s.shakeTimer, 0.24);
+                s.spLand.v += 1.75;
+                s.bellyVel += 0.24;
+                s.screenHitMax = 0.28;
+                s.screenHitTimer = 0.28;
+                s.screenHitIntensity = 0.42;
+                s.screenHitIsDirect = false;
+                s.screenHitIsBreak = false;
+                s.screenHitX = s.px;
+                s.screenHitY = FLOOR_Y - 40;
+                s.screenHitCombo = 2;
+                s.shockwaves.push({
+                  x: s.px,
+                  y: FLOOR_Y - 10,
+                  r: 16,
+                  maxR: 265,
+                  life: 0.46,
+                  maxLife: 0.46,
+                  color: 'rgba(245, 158, 11, 0.78)',
+                  lineWidth: 3.8,
+                });
+                spawnDustPuff(s.px - 22, FLOOR_Y - 2, -1, 7, 230);
+                spawnDustPuff(s.px + 22, FLOOR_Y - 2, 1, 7, 230);
+                spawnCollisionFx(s.px, piggyCenterY + 20, 0, -1, '#F59E0B', true);
+                spawnFloater(s.px, piggyCenterY - 82, 'SHELL CRACKING · TRANSFORM!', '#B45309', 22);
+                synthRef.current?.playIntroStomp();
+              }
+              const t2 = (elapsed - 0.68) / 0.8;
+              const e2 = easeOutCubic(t2);
+              s.piggyDisguise = 1 - 0.74 * e2;
+              s.disguiseScale = 0.34 + 0.6 * e2;
+              s.goalAlt = 0;
+              s.nervousJitterX = Math.sin(now * 0.068) * 4.2 * (1 - t2);
+            } else if (elapsed < 2.34) {
+              // Beat 3 (1.48..2.34s): Hero Emergence! Pop to 1.09x -> 1.00x, levitate & unfurl Hero Cape for 4.0s!
+              if (s.introStage === 1) {
+                s.introStage = 2;
+                s.heroCapeTimer = 5.5;
+                s.heroCapeMax = 5.5;
+                s.heroCapeAlpha = 0.24;
+                s.shakeTimer = Math.max(s.shakeTimer, 0.28);
+                s.spLa.v = -76;
+                s.spRa.v = 76;
+                s.spTail.v = 84;
+                s.spSq.v += 1.25;
+                s.thrS = 1.0;
+                s.bossFlash = 0.22;
+                s.screenHitMax = 0.36;
+                s.screenHitTimer = 0.36;
+                s.screenHitIntensity = 0.66;
+                s.screenHitIsDirect = true;
+                s.screenHitIsBreak = false;
+                s.screenHitX = s.px;
+                s.screenHitY = piggyCenterY;
+                s.screenHitCombo = 4;
+                s.shockwaves.push(
+                  {
+                    x: s.px,
+                    y: piggyCenterY,
+                    r: 22,
+                    maxR: 360,
+                    life: 0.52,
+                    maxLife: 0.52,
+                    color: 'rgba(34, 197, 94, 0.72)',
+                    lineWidth: 4.5,
+                  },
+                  {
+                    x: s.px,
+                    y: piggyCenterY,
+                    r: 14,
+                    maxR: 250,
+                    life: 0.4,
+                    maxLife: 0.4,
+                    color: 'rgba(250, 204, 21, 0.84)',
+                    lineWidth: 3.2,
+                  }
+                );
+                spawnMoneyHurtFx(s.px, piggyCenterY, 14, 360);
+                spawnFloater(s.px, piggyCenterY - 128, 'DOLLAR HERO AWAKENED!', '#15803D', 26);
+                synthRef.current?.playIntroDeploy();
+              }
+              const t3 = Math.max(0, Math.min(1, (elapsed - 1.48) / 0.86));
+              const heroPop = Math.sin(t3 * Math.PI) * 0.095;
+              s.disguiseScale = 0.94 + 0.06 * easeOutCubic(t3) + heroPop;
+              s.piggyDisguise = 0.26 * (1 - easeOutCubic(Math.min(1, t3 * 2.2)));
+              s.goalAlt = t3 < 0.72 ? 78 * Math.sin(Math.min(1, t3 / 0.72) * Math.PI * 0.75) : 0;
+              s.nervousJitterX = 0;
+              const targetX = pat.spots[0].x;
+              s.px += (targetX - s.px) * (1 - Math.exp(-5.2 * rawDt));
+              if (Math.random() < 0.45) {
+                s.particles.push({
+                  x: s.px - s.dir * (38 + Math.random() * 54),
+                  y: piggyCenterY + (Math.random() - 0.4) * 90,
+                  vx: -s.dir * (80 + Math.random() * 110),
+                  vy: -30 - Math.random() * 75,
+                  r: 3.2 + Math.random() * 2.4,
+                  color: Math.random() < 0.45 ? '#FDE047' : Math.random() < 0.5 ? '#22C55E' : '#86EFAC',
+                  life: 0.36,
+                  maxLife: 0.36,
+                  gravity: 80,
+                  kind: 'gleam',
+                  rot: Math.random() * 90,
+                  vrot: 320,
+                  drag: 2.8,
+                });
+              }
+            } else {
+              // Beat 4 (2.34..2.95s): Superhero landing stomp with cape billowing into battle!
+              if (s.introStage === 2) {
+                s.introStage = 3;
+                s.piggyDisguise = 0;
+                s.disguiseScale = 1.0;
+                s.goalAlt = 0;
+                s.spLand.v += 1.05;
+                spawnLandingFx(s.px, 1.05);
+                spawnFloater(s.px, piggyCenterY - 104, 'DROP 3 COINS IN THE SLOT!', '#15803D', 21);
+              }
+              s.piggyDisguise = 0;
+              s.disguiseScale = 1.0;
+              s.goalAlt = 0;
+              s.nervousJitterX = 0;
+              const targetX = pat.spots[0].x;
+              s.px += (targetX - s.px) * (1 - Math.exp(-8 * rawDt));
+              s.dir = s.px < WORLD_W * 0.5 ? 1 : -1;
+            }
+
+            if (s.introTimer <= 0) {
+              s.introTimer = 0;
+              s.introCinematic = 0;
+              s.piggyDisguise = 0;
+              s.disguiseScale = 1.0;
+              s.goalAlt = 0;
+              s.nervousJitterX = 0;
+              s.px = pat.spots[0].x;
+              s.dir = s.px < WORLD_W * 0.5 ? 1 : -1;
+              s.bossAction = 'PATTERN_STOP';
+              s.bossTimer = s.stopDuration;
+              s.visitedSpots.add(0);
             }
           } else if (s.bossAction === 'BOUNCY_BALL') {
             const nv = s.nervousLevel;
@@ -4498,6 +5936,91 @@ export function PiggyDuelPlugin({
                 advanceToNextPatternSpot(true);
               }
             }
+          } else if (s.bossAction === 'DOLLAR_BARRAGE') {
+            const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.55, 1 - 0.4 * s.dizzyLevel) : 1;
+            s.dollarTimer -= dt * dizzyPace;
+            s.walkM += (0 - s.walkM) * Math.min(1, dt * 10);
+
+            // Majestic low-hover sway facing the player while tossing cash volleys
+            const centerPullX = WORLD_W * 0.5 + Math.sin(now * 0.0024) * 145;
+            const targetBarrageX = Math.max(MIN_X + 70, Math.min(MAX_X - 70, s.px * 0.68 + centerPullX * 0.32));
+            s.px += (targetBarrageX - s.px) * (1 - Math.exp(-2.8 * dt));
+            s.goalAlt = 78 + Math.sin(now * 0.0042) * 26;
+            if (Math.abs(s.cx - s.px) > 18) {
+              s.dir = s.cx >= s.px ? 1 : -1;
+            }
+
+            // Ambient golden treasury dust sparkles rising around the piggy
+            if (Math.random() < 0.35) {
+              s.particles.push({
+                x: s.px + (Math.random() - 0.5) * 150,
+                y: piggyCenterY + (Math.random() - 0.5) * 120,
+                vx: (Math.random() - 0.5) * 45,
+                vy: -35 - Math.random() * 55,
+                r: 2.2 + Math.random() * 2.0,
+                color: Math.random() < 0.5 ? '#FEF08A' : '#4ADE80',
+                life: 0.45,
+                maxLife: 0.45,
+                gravity: -20,
+                kind: 'gleam',
+                rot: Math.random() * 90,
+                vrot: 220,
+                drag: 2,
+              });
+            }
+
+            // Rhythmic 3D dollar bill volleys from slot & arms
+            s.dollarBurstAcc -= dt * dizzyPace;
+            if (s.dollarBurstAcc <= 0 && s.dollarTimer > 0.28) {
+              s.dollarBurstAcc = s.difficulty === 'FRENZY' ? 0.145 : 0.175;
+              s.dollarWaveCount += 1;
+              const wave = s.dollarWaveCount;
+              const isGold = wave % 4 === 0;
+              const billsInVolley = wave % 3 === 0 ? 3 : 2;
+              const fanOriginX = slotPos.x;
+              const fanOriginY = slotPos.y - 6;
+
+              for (let bi = 0; bi < billsInVolley; bi++) {
+                const spreadIdx = bi - (billsInVolley - 1) / 2;
+                // Aim upward canopy over slot + sweeping fans toward player
+                const aimBias = Math.atan2(s.cy - fanOriginY, s.cx - fanOriginX);
+                const canopyMode = (wave + bi) % 2 === 0;
+                const launchAng = canopyMode
+                  ? -Math.PI / 2 + spreadIdx * 0.52 + Math.sin(wave * 1.1) * 0.28
+                  : aimBias + spreadIdx * 0.36 - 0.25;
+                const spd = canopyMode ? 520 + Math.random() * 240 : 620 + Math.random() * 260;
+                const noteGold = isGold && bi === 0;
+                const maxLife = 2.05 + Math.random() * 0.55;
+                s.thrownDollars.push({
+                  x: fanOriginX + spreadIdx * 16,
+                  y: fanOriginY,
+                  vx: Math.cos(launchAng) * spd,
+                  vy: Math.sin(launchAng) * spd - (canopyMode ? 110 : 60),
+                  w: noteGold ? 46 : 42,
+                  h: noteGold ? 23 : 21,
+                  rot: (Math.random() - 0.5) * 45,
+                  vrot: (Math.random() < 0.5 ? -1 : 1) * (160 + Math.random() * 220),
+                  flutterPhase: Math.random() * Math.PI * 2,
+                  flutterFreq: 8.5 + Math.random() * 5.5,
+                  swayPhase: Math.random() * Math.PI * 2,
+                  life: maxLife,
+                  maxLife,
+                  kind: noteGold ? 'gold_note' : 'emerald_bill',
+                  trail: [],
+                });
+              }
+              s.bellyVel += 0.045;
+              s.spLa.v -= 14;
+              s.spRa.v += 14;
+              synthRef.current?.playDollarThrow(isGold);
+            }
+
+            if (s.dollarTimer <= 0) {
+              s.dollarTimer = 0;
+              spawnDustPuff(slotPos.x, slotPos.y - 8, s.dir, 5, 160);
+              spawnFloater(slotPos.x, slotPos.y - 42, 'SLOT OPEN!', '#D97706', 18);
+              advanceToNextPatternSpot(true);
+            }
           } else if (s.bossAction === 'WALK') {
             const nv = s.nervousLevel;
             const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.45, 1 - 0.5 * s.dizzyLevel) : 1;
@@ -4621,31 +6144,67 @@ export function PiggyDuelPlugin({
           }
           s.playerIdleTimer += rawDt;
         } else if (s.phase === 'TITLE_MENU') {
-          // When doing nothing on the title screen, piggy walks peacefully right and left!
+          // On the Title screen, the boss stays hidden disguised as a tiny tabletop brass piggybank!
           s.bossAction = 'WALK';
           s.goalAlt = 0;
-          const dizzyPace = s.dizzyLevel > 0.08 ? Math.max(0.45, 1 - 0.5 * s.dizzyLevel) : 1;
-          const menuMinX = MIN_X + 115;
-          const menuMaxX = MAX_X - 115;
-          const menuWalkSpd = 195 * dizzyPace;
-          s.bellyVel += Math.sin(now * 0.0025) * 0.0004;
-          if (s.walkTurnPause > 0) {
-            s.walkTurnPause = Math.max(0, s.walkTurnPause - dt);
-            s.walkM += (0 - s.walkM) * Math.min(1, dt * 12);
-          } else {
-            s.px += s.dir * menuWalkSpd * dt;
-            s.walkM += (0.84 - s.walkM) * Math.min(1, dt * 8);
-            if (s.px <= menuMinX) {
-              s.px = menuMinX;
-              s.dir = 1;
-              s.walkTurnPause = 0.18;
-              s.spLean.v += 10;
-            } else if (s.px >= menuMaxX) {
-              s.px = menuMaxX;
-              s.dir = -1;
-              s.walkTurnPause = 0.18;
-              s.spLean.v -= 10;
+          s.walkM = 0;
+          s.piggyDisguise += (1 - s.piggyDisguise) * (1 - Math.exp(-7.5 * dt));
+          s.ballMorph += (0 - s.ballMorph) * (1 - Math.exp(-8 * dt));
+          s.disguiseScale = 1 - 0.66 * s.piggyDisguise;
+          s.heroCapeTimer = 0;
+          s.heroCapeAlpha = 0;
+          s.dir = 1;
+          const menuAnchorX = WORLD_W * 0.28;
+          s.px += (menuAnchorX - s.px) * (1 - Math.exp(-4.2 * dt));
+          s.bellyVel += Math.sin(now * 0.0024) * 0.00045;
+        }
+
+        // Update Collectible Spawn, Active Bounce/UZZI Buff Timers & Floating Collectible Expiry/Pickup
+        const handWorldX = s.cx + s.handOffsetX;
+        const handWorldY = s.cy + s.handHopY + s.handHoverY + s.handOffsetY;
+        if (s.phase === 'PLAYING' && s.bossAction !== 'BREAKING') {
+          if (s.bounceBuffTimer > 0) {
+            s.bounceBuffTimer = Math.max(0, s.bounceBuffTimer - dt);
+          }
+          if (s.uzziBuffTimer > 0) {
+            s.uzziBuffTimer = Math.max(0, s.uzziBuffTimer - dt);
+          }
+          if (s.bossAction !== 'INTRO_TRANSFORM') {
+            if (s.collectibles.length === 0) {
+              s.collectibleSpawnTimer -= dt;
+              if (s.collectibleSpawnTimer <= 0) {
+                const candidateX =
+                  s.px < WORLD_W * 0.5
+                    ? WORLD_W * (0.52 + Math.random() * 0.30)
+                    : WORLD_W * (0.18 + Math.random() * 0.30);
+                const candidateY = 195 + Math.random() * (FLOOR_Y - 410);
+                const spawnKind = s.nextCollectibleKind;
+                s.nextCollectibleKind = spawnKind === 'UZZI' ? 'BOUNCE' : 'UZZI';
+                s.collectibles.push({
+                  id: s.collectibleSeq++,
+                  kind: spawnKind,
+                  x: candidateX,
+                  y: candidateY,
+                  baseY: candidateY,
+                  vx: (Math.random() < 0.5 ? -1 : 1) * (34 + Math.random() * 26),
+                  bobPhase: Math.random() * Math.PI * 2,
+                  spin: 0,
+                  life: 8.5,
+                  maxLife: 8.5,
+                  r: 26,
+                });
+                s.collectibleSpawnTimer = 8.0 + Math.random() * 3.5;
+                spawnCollisionFx(candidateX, candidateY, 0, -1, spawnKind === 'UZZI' ? '#F97316' : '#10B981', true);
+                synthRef.current?.playCollectibleSpawn();
+              }
             }
+          }
+        } else {
+          if (s.bossAction === 'BREAKING') {
+            s.collectibles = [];
+            s.bounceBuffTimer = 0;
+            s.uzziBuffTimer = 0;
+            s.uzziBurstRemaining = 0;
           }
         }
 
@@ -4656,14 +6215,15 @@ export function PiggyDuelPlugin({
         s.realVx = curRealVx;
 
         // Update player's falling coins with physical ricochets, floor bounces & premium expiration
+        const sc = s.disguiseScale;
         const inBallMode = s.ballMorph > 0.35;
         const activePiggyCenterY = getBallWorldCenterY();
         const activeSlotPos = getSlotHolePos();
-        const slotFacingUp = !inBallMode || activeSlotPos.y <= activePiggyCenterY + 18;
-        const slotHitR = inBallMode ? 38 + s.bellyLevel * 8 : 46 + s.bellyLevel * 10;
-        const ballShellR = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE;
-        const bodyRx = inBallMode ? ballShellR * 0.92 : 58 + s.bellyLevel * 28;
-        const bodyRy = inBallMode ? ballShellR * 0.92 : 82 + s.bellyLevel * 22;
+        const slotFacingUp = !inBallMode || activeSlotPos.y <= activePiggyCenterY + 18 * sc;
+        const slotHitR = (inBallMode ? 38 + s.bellyLevel * 8 : 46 + s.bellyLevel * 10) * sc;
+        const ballShellR = getBallSvgRadius(s.bellyLevel) * PIGGY_SCALE * sc;
+        const bodyRx = inBallMode ? ballShellR * 0.92 : (58 + s.bellyLevel * 28) * sc;
+        const bodyRy = inBallMode ? ballShellR * 0.92 : (82 + s.bellyLevel * 22) * sc;
         const nextProj: Projectile[] = [];
 
         const handleMissedCoin = (missX: number, missY: number) => {
@@ -4677,6 +6237,99 @@ export function PiggyDuelPlugin({
           spawnFloater(missX, Math.min(missY - 22, FLOOR_Y - 40), 'MISS! ROW RESET (0/3)', '#DC2626', 18);
           synthRef.current?.playArmorClank();
         };
+
+        const activateBounceBuff = (cx: number, cy: number) => {
+          s.bounceBuffMax = 10.0;
+          s.bounceBuffTimer = 10.0;
+          s.shockwaves.push({
+            x: cx,
+            y: cy,
+            r: 16,
+            maxR: 135,
+            life: 0.42,
+            maxLife: 0.42,
+            color: 'rgba(16, 185, 129, 0.78)',
+            lineWidth: 3.4,
+          });
+          spawnCollisionFx(cx, cy, 0, -1, '#10B981', true);
+          spawnFloater(cx, Math.max(76, cy - 32), 'BOUNCE COINS! (10.0s)', '#047857', 21);
+          synthRef.current?.playBouncePowerPickup();
+        };
+
+        const activateUziBuff = (cx: number, cy: number) => {
+          s.uzziBuffMax = 10.0;
+          s.uzziBuffTimer = 10.0;
+          // Immediately rack a fresh full magazine so one release unleashes all coins right away
+          s.isReloading = false;
+          s.reloadTimer = 0;
+          s.revolverChambers = s.revolverMax;
+          s.reloadCompleteFlash = 0.35;
+          s.cylinderTargetAngle += Math.PI * 2;
+          s.shockwaves.push({
+            x: cx,
+            y: cy,
+            r: 16,
+            maxR: 145,
+            life: 0.42,
+            maxLife: 0.42,
+            color: 'rgba(249, 115, 22, 0.82)',
+            lineWidth: 3.6,
+          });
+          spawnCollisionFx(cx, cy, 0, -1, '#F97316', true);
+          spawnFloater(cx, Math.max(76, cy - 32), 'UZZI! FULL-MAG BURST (10.0s)', '#C2410C', 21);
+          synthRef.current?.playUziPickup();
+        };
+
+        if (s.collectibles.length > 0 && s.phase === 'PLAYING' && s.bossAction !== 'BREAKING') {
+          const remainingCollectibles: ArenaCollectible[] = [];
+          for (const col of s.collectibles) {
+            col.life -= dt;
+            if (col.life <= 0) {
+              spawnDustPuff(col.x, col.y, 0, 5, 130);
+              spawnFloater(col.x, col.y - 18, 'EXPIRED', '#92400E', 14);
+              s.collectibleSpawnTimer = 6.0 + Math.random() * 3.0;
+              continue;
+            }
+            col.bobPhase += dt * 3.1;
+            col.spin += dt * 2.4;
+            col.x += col.vx * dt;
+            if (col.x < 190) {
+              col.x = 190;
+              col.vx = Math.abs(col.vx);
+            } else if (col.x > WORLD_W - 190) {
+              col.x = WORLD_W - 190;
+              col.vx = -Math.abs(col.vx);
+            }
+            col.y = col.baseY + Math.sin(col.bobPhase) * 12;
+
+            // Collect via hand cursor touch OR hitting it with a spawned coin!
+            let collected = Math.hypot(col.x - handWorldX, col.y - handWorldY) <= col.r + 30;
+            if (!collected) {
+              for (const p of s.projectiles) {
+                if (Math.hypot(p.x - col.x, p.y - col.y) <= p.r + col.r + 8) {
+                  collected = true;
+                  if (col.kind === 'BOUNCE') {
+                    p.superBounce = true;
+                    if (!p.trail) p.trail = [];
+                    p.trail.push({ x: p.x, y: p.y, bounce: true });
+                    p.life = Math.max(p.life, 5.2);
+                    p.maxLife = Math.max(p.maxLife, p.life);
+                    p.vy = -Math.max(440, Math.abs(p.vy) * 0.72);
+                    if (p.gravity < 300) p.gravity = 1850;
+                  }
+                  break;
+                }
+              }
+            }
+            if (collected) {
+              if (col.kind === 'UZZI') activateUziBuff(col.x, col.y);
+              else activateBounceBuff(col.x, col.y);
+              continue;
+            }
+            remainingCollectibles.push(col);
+          }
+          s.collectibles = remainingCollectibles;
+        }
 
         for (const p of s.projectiles) {
           p.life -= dt;
@@ -4694,15 +6347,50 @@ export function PiggyDuelPlugin({
 
           if (!p.trail) p.trail = [];
           p.trail.push({ x: p.x, y: p.y });
-          if (p.trail.length > 8) p.trail.shift();
+          const maxTrailLen = p.superBounce ? 24 : 8;
+          while (p.trail.length > maxTrailLen) p.trail.shift();
+
+          const pushBounceNode = (bx: number, by: number) => {
+            if (!p.superBounce) return;
+            if (!p.trail) p.trail = [];
+            p.trail.push({ x: bx, y: by, bounce: true });
+            while (p.trail.length > 24) p.trail.shift();
+          };
 
           p.vy += p.gravity * dt;
           p.x += p.vx * dt;
           p.y += p.vy * dt;
           p.rot += p.vrot * dt;
 
-          // Off-arena horizontal or ceiling vanish
-          if (p.x < -80 || p.x > WORLD_W + 80 || p.y < -180) {
+          // Arena walls & ceiling: superBounce coins rebound elastically inside arena instead of vanishing!
+          if (p.superBounce) {
+            if (p.x - p.r < 14 && p.vx < 0) {
+              p.x = p.r + 14;
+              p.vx = Math.abs(p.vx) * 0.88;
+              p.bounces = (p.bounces ?? 0) + 1;
+              p.vrot *= -0.8;
+              pushBounceNode(p.x, p.y);
+              spawnCollisionFx(p.x, p.y, 1, 0, '#10B981', false);
+              synthRef.current?.playSpringBounce(p.bounces);
+            } else if (p.x + p.r > WORLD_W - 14 && p.vx > 0) {
+              p.x = WORLD_W - p.r - 14;
+              p.vx = -Math.abs(p.vx) * 0.88;
+              p.bounces = (p.bounces ?? 0) + 1;
+              p.vrot *= -0.8;
+              pushBounceNode(p.x, p.y);
+              spawnCollisionFx(p.x, p.y, -1, 0, '#10B981', false);
+              synthRef.current?.playSpringBounce(p.bounces);
+            }
+            if (p.y - p.r < 14 && p.vy < 0) {
+              p.y = p.r + 14;
+              p.vy = Math.abs(p.vy) * 0.85;
+              if (p.gravity < 300) p.gravity = 1850;
+              p.bounces = (p.bounces ?? 0) + 1;
+              pushBounceNode(p.x, p.y);
+              spawnCollisionFx(p.x, p.y, 0, 1, '#10B981', false);
+              synthRef.current?.playSpringBounce(p.bounces);
+            }
+          } else if (p.x < -80 || p.x > WORLD_W + 80 || p.y < -180) {
             const edgeX = Math.max(10, Math.min(WORLD_W - 10, p.x));
             const edgeY = Math.max(10, p.y);
             if (!p.missedHandled) {
@@ -4713,44 +6401,138 @@ export function PiggyDuelPlugin({
             continue;
           }
 
-          // Arena floor bounce (up to 2 elastic clinks) or premium settle-dissolve
+          // Arena floor bounce (up to 8 high-energy bounces for superBounce coins, 2 normally)
           if (p.y + p.r * 0.7 >= FLOOR_Y && p.vy > 0) {
-            if (!p.missedHandled) {
+            const bounces = p.bounces ?? 0;
+            const maxBounces = p.superBounce ? 8 : 2;
+            if (!p.superBounce && !p.missedHandled) {
               p.missedHandled = true;
               handleMissedCoin(p.x, FLOOR_Y - 12);
             }
-            const bounces = p.bounces ?? 0;
-            if (bounces < 2 && Math.abs(p.vy) > 170) {
+            if (bounces < maxBounces && (p.superBounce || Math.abs(p.vy) > 170)) {
               p.y = FLOOR_Y - p.r * 0.7;
-              p.vy = -Math.abs(p.vy) * 0.48;
-              p.vx *= 0.74;
-              p.bounces = bounces + 1;
-              p.life = Math.min(p.life, 0.55);
-              p.vrot *= -0.65;
-              s.landingRings.push({
-                x: p.x,
-                y: FLOOR_Y + 2,
-                rx: 8,
-                maxRx: 34,
-                life: 0.22,
-                maxLife: 0.22,
-                color: 'rgba(217, 119, 6, 0.42)',
-              });
-              spawnDustPuff(p.x, FLOOR_Y - 2, p.vx >= 0 ? 1 : -1, 2, 95);
-              spawnCollisionFx(p.x, FLOOR_Y - 4, 0, -1, '#F59E0B', false);
-              synthRef.current?.playCoinClink();
+              if (p.superBounce) {
+                p.vy = -Math.min(1180, Math.max(540, Math.abs(p.vy) * 0.86));
+                p.vx *= 0.94;
+                if (p.gravity < 300) p.gravity = 1850;
+                p.bounces = bounces + 1;
+                p.vrot *= -0.78;
+                pushBounceNode(p.x, FLOOR_Y - p.r * 0.3);
+                s.landingRings.push({
+                  x: p.x,
+                  y: FLOOR_Y + 2,
+                  rx: 10,
+                  maxRx: 44,
+                  life: 0.28,
+                  maxLife: 0.28,
+                  color: 'rgba(16, 185, 129, 0.52)',
+                });
+                spawnDustPuff(p.x, FLOOR_Y - 2, p.vx >= 0 ? 1 : -1, 3, 125);
+                spawnCollisionFx(p.x, FLOOR_Y - 4, 0, -1, '#10B981', true);
+                synthRef.current?.playSpringBounce(p.bounces);
+              } else {
+                p.vy = -Math.abs(p.vy) * 0.48;
+                p.vx *= 0.74;
+                p.bounces = bounces + 1;
+                p.life = Math.min(p.life, 0.55);
+                p.vrot *= -0.65;
+                s.landingRings.push({
+                  x: p.x,
+                  y: FLOOR_Y + 2,
+                  rx: 8,
+                  maxRx: 34,
+                  life: 0.22,
+                  maxLife: 0.22,
+                  color: 'rgba(217, 119, 6, 0.42)',
+                });
+                spawnDustPuff(p.x, FLOOR_Y - 2, p.vx >= 0 ? 1 : -1, 2, 95);
+                spawnCollisionFx(p.x, FLOOR_Y - 4, 0, -1, '#F59E0B', false);
+                synthRef.current?.playCoinClink();
+              }
             } else {
+              if (!p.missedHandled) {
+                p.missedHandled = true;
+                handleMissedCoin(p.x, FLOOR_Y - 12);
+              }
               spawnCoinExpireFx(p.x, FLOOR_Y - 6, p.vx, p.vy);
               continue;
             }
           }
 
           if (s.bossAction !== 'BREAKING') {
-            // 1. Top-drop into Piggybank's Coin Slot Hole (+1 in the 3-in-a-row streak!)
+            const inDollarBarrage = s.bossAction === 'DOLLAR_BARRAGE';
+
+            // 0. Mid-air Thrown Dollar Bill Interception ("not allowing coins to drop in")
+            let blockedByBill = false;
+            for (const d of s.thrownDollars) {
+              if (d.intercepted) continue;
+              const dDist = Math.hypot(p.x - d.x, p.y - d.y);
+              if (dDist < p.r + 22) {
+                d.intercepted = true;
+                d.vx += p.vx * 0.45;
+                d.vy -= 180;
+                d.vrot *= -1.6;
+                p.vx = -p.vx * 0.55 + (p.x >= d.x ? 180 : -180);
+                p.vy = -Math.max(320, Math.abs(p.vy) * 0.72);
+                if (p.gravity < 300) p.gravity = 1950;
+                p.armorHitCooldown = 0.2;
+                p.bounces = (p.bounces ?? 0) + 1;
+                if (!p.superBounce) p.life = Math.min(p.life, 0.55);
+                else pushBounceNode(p.x, p.y);
+                spawnCollisionFx(p.x, p.y, 0, -1, d.kind === 'gold_note' ? '#FBBF24' : '#22C55E', true);
+                spawnFloater(p.x, p.y - 24, 'BILL BLOCKED!', '#15803D', 15);
+                synthRef.current?.playVaultDeflect();
+                blockedByBill = true;
+                break;
+              }
+            }
+            if (blockedByBill) {
+              nextProj.push(p);
+              continue;
+            }
+
+            // 1. Top-drop into Piggybank's Coin Slot Hole (or Vault Dome Rejection during DOLLAR_BARRAGE!)
             const distToSlot = Math.hypot(p.x - activeSlotPos.x, p.y - activeSlotPos.y);
-            const slotApproachOk = p.gravity < 300 ? p.vy > -420 : p.vy > 0;
-            const effectiveSlotR = slotHitR + (p.power ?? 0) * 10;
-            if (slotApproachOk && slotFacingUp && distToSlot < effectiveSlotR) {
+            const slotApproachOk =
+              p.gravity < 300 ? p.vy > -420 : p.superBounce && (p.bounces ?? 0) > 0 ? p.vy > -140 : p.vy > 0;
+            const effectiveSlotR = slotHitR + (p.power ?? 0) * 10 + (p.superBounce && (p.bounces ?? 0) > 0 ? 8 : 0);
+
+            if (inDollarBarrage && distToSlot < effectiveSlotR + 18) {
+              const outDx = p.x - activeSlotPos.x;
+              const outDy = p.y - activeSlotPos.y;
+              const outLen = Math.hypot(outDx, outDy) || 1;
+              const rejNx = outDx / outLen;
+              const rejNy = Math.min(-0.45, outDy / outLen);
+              p.vx = rejNx * 520 + (Math.random() - 0.5) * 120;
+              p.vy = rejNy * 620 - 160;
+              if (p.gravity < 300) p.gravity = 1950;
+              p.x = activeSlotPos.x + rejNx * (effectiveSlotR + 22);
+              p.y = activeSlotPos.y + rejNy * (effectiveSlotR + 22);
+              p.armorHitCooldown = 0.26;
+              p.bounces = (p.bounces ?? 0) + 1;
+              if (!p.superBounce) p.life = Math.min(p.life, 0.58);
+              else pushBounceNode(p.x, p.y);
+              p.vrot = (rejNx >= 0 ? 1 : -1) * 1200;
+              p.missedHandled = true; // Sealed dome deflection shouldn't reset player streak
+
+              s.shockwaves.push({
+                x: activeSlotPos.x,
+                y: activeSlotPos.y,
+                r: 16,
+                maxR: 78,
+                life: 0.28,
+                maxLife: 0.28,
+                color: '#22C55E',
+                lineWidth: 2.5,
+              });
+              spawnCollisionFx(activeSlotPos.x, activeSlotPos.y - 8, rejNx, rejNy, '#22C55E', true);
+              spawnFloater(activeSlotPos.x, activeSlotPos.y - 44, 'SLOT SEALED!', '#15803D', 18);
+              synthRef.current?.playVaultDeflect();
+              nextProj.push(p);
+              continue;
+            }
+
+            if (!inDollarBarrage && s.bossAction !== 'INTRO_TRANSFORM' && slotApproachOk && slotFacingUp && distToSlot < effectiveSlotR) {
               s.droppingCoins.push({
                 relX: p.x - activeSlotPos.x,
                 relY: Math.min(-10, p.y - activeSlotPos.y),
@@ -4766,7 +6548,7 @@ export function PiggyDuelPlugin({
                 dir: s.dir,
               });
               spawnCollisionFx(activeSlotPos.x, activeSlotPos.y, 0, -1, (p.power ?? 0) >= 0.72 ? '#38BDF8' : '#22C55E', true);
-              receiveCoinInSlot(activeSlotPos.x, activeSlotPos.y, 1, true, p.power ?? 0);
+              receiveCoinInSlot(activeSlotPos.x, activeSlotPos.y, 1, true, p.power ?? 0, p.r);
               continue;
             }
 
@@ -4780,13 +6562,13 @@ export function PiggyDuelPlugin({
               const hitNx = rawNx / nLen;
               const hitNy = rawNy / nLen;
               const dot = p.vx * hitNx + p.vy * hitNy;
-              const restitution = inBallMode ? 0.82 : 0.68;
+              const restitution = p.superBounce ? 0.92 : inBallMode ? 0.82 : 0.68;
               if (dot < 0) {
                 p.vx = (p.vx - (1 + restitution) * dot * hitNx) + s.realVx * 0.35;
                 p.vy = p.vy - (1 + restitution) * dot * hitNy;
               } else {
-                p.vx = hitNx * 320 + s.realVx * 0.35;
-                p.vy = hitNy * 320 - 120;
+                p.vx = hitNx * (p.superBounce ? 420 : 320) + s.realVx * 0.35;
+                p.vy = hitNy * (p.superBounce ? 420 : 320) - 120;
               }
               if (p.gravity < 300) p.gravity = 1950;
               // Push coin just outside the brass shell so it visibly ricochets cleanly
@@ -4794,11 +6576,13 @@ export function PiggyDuelPlugin({
               p.y = activePiggyCenterY + hitNy * (bodyRy + p.r * 0.65);
               p.armorHitCooldown = 0.24;
               p.bounces = (p.bounces ?? 0) + 1;
-              p.life = Math.min(p.life, 0.58);
+              if (!p.superBounce) p.life = Math.min(p.life, 0.58);
+              else pushBounceNode(p.x, p.y);
               p.vrot = (hitNx >= 0 ? 1 : -1) * 1100;
 
-              spawnCollisionFx(p.x, p.y, hitNx, hitNy, inBallMode ? '#FBBF24' : '#F59E0B', inBallMode);
-              if (inBallMode) synthRef.current?.playBallRicochet();
+              spawnCollisionFx(p.x, p.y, hitNx, hitNy, p.superBounce ? '#10B981' : inBallMode ? '#FBBF24' : '#F59E0B', inBallMode || !!p.superBounce);
+              if (p.superBounce) synthRef.current?.playSpringBounce(p.bounces);
+              else if (inBallMode) synthRef.current?.playBallRicochet();
               receiveCoinInSlot(p.x, p.y, 0, false, 0);
               nextProj.push(p);
               continue;
@@ -4808,6 +6592,51 @@ export function PiggyDuelPlugin({
           nextProj.push(p);
         }
         s.projectiles = nextProj;
+
+        // Update 3D Fluttering Thrown Dollar Bills (aerodynamic drift + cursor swat/catch bonus)
+        const nextDollars: ThrownDollar[] = [];
+        const handFastSwat = Math.hypot(s.velX, s.velY) > 360 || s.dashTimer > 0 || s.handGlideTimer > 0 || s.handHopY < -4;
+        for (const d of s.thrownDollars) {
+          d.life -= dt;
+          if (d.life <= 0) continue;
+
+          d.trail.push({ x: d.x, y: d.y });
+          if (d.trail.length > 7) d.trail.shift();
+
+          d.flutterPhase += d.flutterFreq * dt;
+          d.swayPhase += 4.2 * dt;
+          // Paper drag & graceful sinusoidal bill-flutter aerodynamics
+          const drag = Math.exp(-1.55 * dt);
+          d.vx = d.vx * drag + Math.sin(d.swayPhase) * 240 * dt;
+          d.vy = d.vy * drag + 420 * dt - Math.abs(Math.cos(d.flutterPhase)) * 135 * dt;
+          d.x += d.vx * dt;
+          d.y += d.vy * dt;
+          d.rot += d.vrot * dt * 0.55;
+
+          // Hand swat / catch flying dollar bill for +$$ bonus & gleam burst
+          if (s.phase === 'PLAYING' && handFastSwat && Math.hypot(d.x - handWorldX, d.y - handWorldY) < 44) {
+            const swatBonus = d.kind === 'gold_note' ? 25 : 15;
+            s.score += swatBonus;
+            if (s.score > s.bestScore) {
+              s.bestScore = s.score;
+              writeBestScore(storageKey, s.bestScore);
+            }
+            spawnCollisionFx(d.x, d.y, 0, -1, d.kind === 'gold_note' ? '#FBBF24' : '#22C55E', d.kind === 'gold_note');
+            spawnFloater(d.x, d.y - 18, `+$${swatBonus}`, d.kind === 'gold_note' ? '#D97706' : '#15803D', 17);
+            synthRef.current?.playDollarSwat(d.kind === 'gold_note');
+            continue;
+          }
+
+          if (d.y >= FLOOR_Y - 8) {
+            d.y = FLOOR_Y - 8;
+            d.vy = -Math.abs(d.vy) * 0.25;
+            d.vx *= 0.65;
+            d.life = Math.min(d.life, 0.22);
+          }
+          if (d.x < -60 || d.x > WORLD_W + 60) continue;
+          nextDollars.push(d);
+        }
+        s.thrownDollars = nextDollars;
 
         // Boss vertical jump or underdamped jet flight physics + touchdown detection
         const prevAltFrame = s.alt;
@@ -4855,7 +6684,7 @@ export function PiggyDuelPlugin({
         if (boxSync && wrapSync) {
           const rect = boxSync.getBoundingClientRect();
           const pxX = ((s.cx + s.handOffsetX) / WORLD_W) * rect.width;
-          const pxY = ((s.cy + s.handHopY + s.handOffsetY) / WORLD_H) * rect.height;
+          const pxY = ((s.cy + s.handHopY + s.handHoverY + s.handOffsetY) / WORLD_H) * rect.height;
           wrapSync.style.transform = `translate3d(${pxX.toFixed(1)}px, ${pxY.toFixed(1)}px, 0)`;
           wrapSync.style.opacity = '1';
         }
@@ -4977,14 +6806,14 @@ export function PiggyDuelPlugin({
           s.bellyLevel = 0;
           s.bellyVel *= -0.4;
         }
-        const a = Math.min(1.35, s.bellyLevel + s.ballMorph * 0.25);
+        const a = Math.min(1.35, s.bellyLevel + s.ballMorph * 0.25 + s.piggyDisguise * 0.06);
         s.ripplePhase += 0.35 * dt60 * (0.4 + Math.min(1, Math.abs(s.bellyVel) * 18));
         const wob = Math.min(0.14, Math.abs(s.bellyVel) * 2.4);
-        const st = Math.max(-0.34, Math.min(0.34, s.bellyVel * 6.5)) * (1 - s.ballMorph * 0.35);
+        const st = Math.max(-0.34, Math.min(0.34, s.bellyVel * 6.5)) * (1 - s.ballMorph * 0.35) * (1 - s.piggyDisguise * 0.55);
         if (!(s.bossAction === 'BREAKING' && s.breakStage >= 1)) {
-          applyBalloon(a, st, wob, s.ballMorph, s.bellyLevel);
+          applyBalloon(a, st, wob, s.ballMorph, s.bellyLevel, s.piggyDisguise);
         } else {
-          applyBalloon(0.28, 0, 0, 0, 0.28);
+          applyBalloon(0.28, 0, 0, 0, 0.28, 0);
         }
         poseRig(dt, now);
       }
@@ -5003,6 +6832,144 @@ export function PiggyDuelPlugin({
 
           const piggyCenterY = getBallWorldCenterY();
           const slotPos = getSlotHolePos();
+
+          // Cinematic Awakening Spotlight & Theater Lighting behind Piggy during INTRO_TRANSFORM
+          if (s.introCinematic > 0.02 && s.bossAction !== 'BREAKING') {
+            const ic = s.introCinematic;
+            ctx.save();
+
+            // 1. Theatrical dusk pool dimming arena edges so the tiny piggybank commands the stage
+            const duskGrad = ctx.createRadialGradient(
+              s.px,
+              piggyCenterY,
+              68 + (s.disguiseScale - 0.34) * 180,
+              s.px,
+              piggyCenterY,
+              760
+            );
+            duskGrad.addColorStop(0, 'rgba(18, 11, 5, 0)');
+            duskGrad.addColorStop(0.55, `rgba(22, 13, 6, ${(0.22 * ic).toFixed(3)})`);
+            duskGrad.addColorStop(1, `rgba(14, 8, 3, ${(0.42 * ic).toFixed(3)})`);
+            ctx.fillStyle = duskGrad;
+            ctx.fillRect(-40, -40, WORLD_W + 80, WORLD_H + 80);
+
+            // 2. Twin Diagonal Volumetric Stage Spotlight Cones focused on the piggybank
+            const drawBeam = (srcX: number, spreadW: number, alphaScale: number) => {
+              const bGrad = ctx.createLinearGradient(srcX, -30, s.px, FLOOR_Y + 24);
+              bGrad.addColorStop(0, `rgba(254, 249, 195, ${(0.18 * ic * alphaScale).toFixed(3)})`);
+              bGrad.addColorStop(0.65, `rgba(251, 191, 36, ${(0.1 * ic * alphaScale).toFixed(3)})`);
+              bGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+              ctx.fillStyle = bGrad;
+              ctx.beginPath();
+              ctx.moveTo(srcX - 24, -30);
+              ctx.lineTo(srcX + 24, -30);
+              ctx.lineTo(s.px + spreadW, FLOOR_Y + 20);
+              ctx.lineTo(s.px - spreadW, FLOOR_Y + 20);
+              ctx.closePath();
+              ctx.fill();
+            };
+            const beamHalfW = 72 + s.disguiseScale * 110;
+            drawBeam(s.px - 260, beamHalfW, 1.0);
+            drawBeam(s.px + 230, beamHalfW * 0.85, 0.72);
+
+            // 3. Upward golden light rays streaming from the coin slot before/during reveal
+            if (s.introStage <= 2) {
+              const rayGrad = ctx.createLinearGradient(slotPos.x, slotPos.y, slotPos.x, slotPos.y - 250);
+              rayGrad.addColorStop(0, `rgba(254, 240, 138, ${(0.34 * ic).toFixed(3)})`);
+              rayGrad.addColorStop(1, 'rgba(254, 240, 138, 0)');
+              ctx.fillStyle = rayGrad;
+              ctx.beginPath();
+              ctx.moveTo(slotPos.x - 10, slotPos.y);
+              ctx.lineTo(slotPos.x + 10, slotPos.y);
+              ctx.lineTo(slotPos.x + 92, slotPos.y - 250);
+              ctx.lineTo(slotPos.x - 92, slotPos.y - 250);
+              ctx.closePath();
+              ctx.fill();
+            }
+
+            // 4. Central golden aura halo + rotating clockwork calibration rings
+            const haloR = 190 + s.disguiseScale * 190;
+            const awGrad = ctx.createRadialGradient(s.px, piggyCenterY, 12, s.px, piggyCenterY, haloR);
+            awGrad.addColorStop(0, `rgba(254, 240, 138, ${(0.34 * ic).toFixed(3)})`);
+            awGrad.addColorStop(0.45, `rgba(245, 158, 11, ${(0.16 * ic).toFixed(3)})`);
+            awGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = awGrad;
+            ctx.beginPath();
+            ctx.arc(s.px, piggyCenterY, haloR, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.translate(s.px, piggyCenterY);
+            const ringScale = 0.45 + 0.6 * s.disguiseScale;
+            ctx.rotate(now * 0.0014);
+            ctx.globalAlpha = 0.34 * ic;
+            ctx.strokeStyle = '#B45309';
+            ctx.lineWidth = 1.6;
+            ctx.setLineDash([14, 10]);
+            ctx.beginPath();
+            ctx.arc(0, 0, 146 * ringScale, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.rotate(-now * 0.0028);
+            ctx.strokeStyle = '#F59E0B';
+            ctx.lineWidth = 1.2;
+            ctx.setLineDash([5, 12]);
+            ctx.beginPath();
+            ctx.arc(0, 0, 168 * ringScale, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // 5. Crisp 4-point heroic lens star during Beat 3 emergence
+            if (s.introStage === 2) {
+              ctx.rotate(now * 0.0015);
+              const starR = 135;
+              const starGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, starR);
+              starGrad.addColorStop(0, `rgba(254, 249, 195, ${(0.75 * ic).toFixed(3)})`);
+              starGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+              ctx.fillStyle = starGrad;
+              ctx.globalAlpha = 0.65 * ic;
+              ctx.beginPath();
+              for (let k = 0; k < 4; k++) {
+                const a0 = (k * Math.PI) / 2;
+                ctx.lineTo(Math.cos(a0) * starR, Math.sin(a0) * starR);
+                ctx.lineTo(Math.cos(a0 + Math.PI / 4) * 14, Math.sin(a0 + Math.PI / 4) * 14);
+              }
+              ctx.closePath();
+              ctx.fill();
+            }
+            ctx.restore();
+          }
+
+          // Cinematic Treasury Spotlight Aura behind Piggy during DOLLAR_BARRAGE
+          if (s.dollarCinematic > 0.02 && s.bossAction !== 'BREAKING') {
+            const dc = s.dollarCinematic;
+            ctx.save();
+            const spotGrad = ctx.createRadialGradient(s.px, piggyCenterY, 24, s.px, piggyCenterY, 340);
+            spotGrad.addColorStop(0, `rgba(34, 197, 94, ${(0.2 * dc).toFixed(3)})`);
+            spotGrad.addColorStop(0.45, `rgba(251, 191, 36, ${(0.12 * dc).toFixed(3)})`);
+            spotGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = spotGrad;
+            ctx.beginPath();
+            ctx.arc(s.px, piggyCenterY, 340, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Rotating luxury geometric vault ring behind the piggy
+            ctx.translate(s.px, piggyCenterY);
+            ctx.rotate(now * 0.0008);
+            ctx.globalAlpha = 0.24 * dc;
+            ctx.strokeStyle = '#15803D';
+            ctx.lineWidth = 1.4;
+            ctx.setLineDash([18, 12]);
+            ctx.beginPath();
+            ctx.arc(0, 0, 152, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.rotate(-now * 0.0018);
+            ctx.strokeStyle = '#D97706';
+            ctx.lineWidth = 1.1;
+            ctx.setLineDash([8, 16]);
+            ctx.beginPath();
+            ctx.arc(0, 0, 174, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
 
           // Elastic ball bounce echoes (dissolving squash-and-stretch rings)
           for (let i = s.ballAfterimages.length - 1; i >= 0; i--) {
@@ -5176,7 +7143,7 @@ export function PiggyDuelPlugin({
           }
 
           // Floating 3-Coin-Row Streak Pips & Keep-Pumped Gauge above Piggy
-          if (s.phase === 'PLAYING' && s.bossAction !== 'BREAKING') {
+          if (s.phase === 'PLAYING' && s.bossAction !== 'BREAKING' && s.bossAction !== 'INTRO_TRANSFORM') {
             const pipY = FLOOR_Y + s.py - Math.round(355 * PIGGY_UNIT) - Math.round(s.dizzyLevel * 22);
             const pipX = s.px + (s.bossAction === 'PATTERN_STOP' ? s.nervousJitterX : 0);
             ctx.save();
@@ -5212,7 +7179,7 @@ export function PiggyDuelPlugin({
           }
 
           // Learned Pattern Waypoint Markers (shows visited stop spots so players learn & predict!)
-          if (s.phase === 'PLAYING' && s.bossAction !== 'BREAKING') {
+          if (s.phase === 'PLAYING' && s.bossAction !== 'BREAKING' && s.bossAction !== 'INTRO_TRANSFORM') {
             const pat = ROUND_PATTERNS[s.patternIndex % ROUND_PATTERNS.length];
             ctx.save();
             // Connect visited consecutive spots lightly
@@ -5320,9 +7287,10 @@ export function PiggyDuelPlugin({
               const bodyRx = inBallMode ? 72 + s.bellyLevel * 24 : 58 + s.bellyLevel * 28;
               const bodyRy = inBallMode ? 72 + s.bellyLevel * 24 : 82 + s.bellyLevel * 22;
 
-              let hitKind: 'none' | 'slot' | 'body' | 'floor' = 'none';
+              let hitKind: 'none' | 'slot' | 'locked' | 'body' | 'floor' = 'none';
               let impactX = lx;
               let impactY = ly;
+              const slotSealed = s.bossAction === 'DOLLAR_BARRAGE';
 
               for (let step = 0; step < maxSteps; step++) {
                 lvy += launch.gravity * stepDt;
@@ -5337,7 +7305,7 @@ export function PiggyDuelPlugin({
                   Math.hypot(launch.interceptX - slotPos.x, launch.interceptY - slotPos.y) > 8 &&
                   Math.hypot(lx - launch.interceptX, ly - launch.interceptY) < previewSlotR;
                 if (slotPreviewOk && slotFacingUp && (hitLiveSlot || hitPredSlot)) {
-                  hitKind = 'slot';
+                  hitKind = slotSealed ? 'locked' : 'slot';
                   impactX = hitPredSlot && !hitLiveSlot ? launch.interceptX : slotPos.x;
                   impactY = hitPredSlot && !hitLiveSlot ? launch.interceptY : slotPos.y;
                   break;
@@ -5398,36 +7366,48 @@ export function PiggyDuelPlugin({
               // Predictive moving-slot ghost marker when leading a moving/bouncing piggy
               const leadOffset = Math.hypot(launch.interceptX - slotPos.x, launch.interceptY - slotPos.y);
               if (leadOffset > 10) {
-                ctx.globalAlpha = fadeAlpha * (0.45 + grow * 0.45);
-                ctx.strokeStyle = hitKind === 'slot' ? 'rgba(34, 197, 94, 0.8)' : 'rgba(14, 165, 233, 0.5)';
-                ctx.lineWidth = 1.6 + grow * 0.8;
-                ctx.setLineDash([4, 4]);
+                ctx.globalAlpha = fadeAlpha * (0.42 + grow * 0.42);
+                ctx.strokeStyle = hitKind === 'slot' ? 'rgba(22, 163, 74, 0.78)' : 'rgba(14, 165, 233, 0.48)';
+                ctx.lineWidth = 1.05;
+                ctx.setLineDash([3, 4]);
                 ctx.beginPath();
                 ctx.moveTo(slotPos.x, slotPos.y);
                 ctx.lineTo(launch.interceptX, launch.interceptY);
                 ctx.stroke();
+                ctx.setLineDash([]);
                 ctx.beginPath();
-                ctx.arc(launch.interceptX, launch.interceptY, 14 + grow * 6, 0, Math.PI * 2);
+                ctx.arc(launch.interceptX, launch.interceptY, 10 + grow * 4, 0, Math.PI * 2);
                 ctx.stroke();
               }
 
-              // Soft base slot ring on piggy
-              ctx.globalAlpha = fadeAlpha;
+              // Precision hairline slot collar on piggy
+              ctx.globalAlpha = fadeAlpha * (hitKind === 'slot' ? 0.92 : 0.7);
               ctx.strokeStyle =
                 hitKind === 'slot'
-                  ? 'rgba(34, 197, 94, 0.95)'
+                  ? '#16A34A'
                   : hitKind === 'body'
-                  ? 'rgba(245, 158, 11, 0.72)'
+                  ? 'rgba(245, 158, 11, 0.7)'
                   : isStraightLaser
-                  ? 'rgba(2, 132, 199, 0.38)'
-                  : 'rgba(180, 83, 9, 0.28)';
-              ctx.lineWidth = (hitKind === 'slot' ? 3.2 : 1.8) + grow * 1.4;
-              ctx.setLineDash(hitKind === 'slot' ? [] : [6, 6]);
+                  ? 'rgba(2, 132, 199, 0.42)'
+                  : 'rgba(180, 83, 9, 0.34)';
+              ctx.lineWidth = hitKind === 'slot' ? 1.65 : 1.05;
+              const collarR = (hitKind === 'slot' ? 22 : 18) + grow * 5;
+              ctx.setLineDash(hitKind === 'slot' ? [] : [4, 5]);
               ctx.beginPath();
-              ctx.arc(slotPos.x, slotPos.y, (hitKind === 'slot' ? 28 : 22) + grow * 10, 0, Math.PI * 2);
+              ctx.arc(slotPos.x, slotPos.y, collarR, 0, Math.PI * 2);
               ctx.stroke();
+              ctx.setLineDash([]);
+              if (hitKind === 'slot') {
+                for (let ti = 0; ti < 4; ti++) {
+                  const ta = (ti * Math.PI) / 2 + Math.PI / 4;
+                  ctx.beginPath();
+                  ctx.moveTo(slotPos.x + Math.cos(ta) * (collarR - 4), slotPos.y + Math.sin(ta) * (collarR - 4));
+                  ctx.lineTo(slotPos.x + Math.cos(ta) * (collarR + 4), slotPos.y + Math.sin(ta) * (collarR + 4));
+                  ctx.stroke();
+                }
+              }
 
-              // Growing Targeting Laser Beam
+              // Razor-Thin Optical Targeting Laser Beam
               if (visiblePts.length >= 2) {
                 ctx.setLineDash([]);
                 ctx.lineCap = 'round';
@@ -5455,152 +7435,274 @@ export function PiggyDuelPlugin({
                 const chargedBeamColor = elev >= 0.72 ? '#EF4444' : elev >= 0.32 ? '#0EA5E9' : launch.profile.beamColor;
                 const chargedCoreColor = elev >= 0.72 ? '#FEF08A' : elev >= 0.32 ? '#E0F2FE' : launch.profile.coreColor;
                 const laserColor =
-                  hitKind === 'slot' ? '#22C55E' : hitKind === 'body' ? '#F59E0B' : chargedBeamColor;
+                  hitKind === 'slot'
+                    ? '#16A34A'
+                    : hitKind === 'locked'
+                    ? '#DC2626'
+                    : hitKind === 'body'
+                    ? '#F59E0B'
+                    : chargedBeamColor;
                 const laserCore =
-                  hitKind === 'slot' ? '#FEF08A' : hitKind === 'body' ? '#FEF3C7' : chargedCoreColor;
+                  hitKind === 'slot'
+                    ? '#DCFCE7'
+                    : hitKind === 'locked'
+                    ? '#FECACA'
+                    : hitKind === 'body'
+                    ? '#FEF3C7'
+                    : chargedCoreColor;
 
-                // Hand Emitter Ignition & Growing Plasma Orb
-                const emitterR = (4.5 + grow * 11.5 + s.laserIgniteFlash * 5) * (hitKind === 'slot' ? 1.15 : 1);
-                ctx.globalAlpha = (0.34 + grow * 0.36) * fadeAlpha;
-                ctx.fillStyle = laserColor;
+                const tipPt = visiblePts[visiblePts.length - 1];
+                const beamSpan = Math.hypot(tipPt.x - launch.spawnX, tipPt.y - launch.spawnY);
+                const beamGrad =
+                  beamSpan > 4
+                    ? (() => {
+                        const g = ctx.createLinearGradient(launch.spawnX, launch.spawnY, tipPt.x, tipPt.y);
+                        g.addColorStop(0, laserCore);
+                        g.addColorStop(0.18, laserColor);
+                        g.addColorStop(0.86, laserColor);
+                        g.addColorStop(1, '#FFFBEB');
+                        return g;
+                      })()
+                    : laserColor;
+
+                // Precision Optical Emitter (soft radial bloom + tiny crisp focal pin + thin rotating aperture)
+                const emitterR = (7.5 + grow * 5.5 + s.laserIgniteFlash * 4) * (hitKind === 'slot' ? 1.1 : 1);
+                const emitGlow = ctx.createRadialGradient(
+                  launch.spawnX,
+                  launch.spawnY,
+                  0.8,
+                  launch.spawnX,
+                  launch.spawnY,
+                  emitterR * 1.45
+                );
+                emitGlow.addColorStop(0, '#FFFFFF');
+                emitGlow.addColorStop(0.28, laserCore);
+                emitGlow.addColorStop(0.58, laserColor);
+                emitGlow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                ctx.globalAlpha = (0.48 + grow * 0.34) * fadeAlpha;
+                ctx.fillStyle = emitGlow;
                 ctx.beginPath();
                 ctx.arc(launch.spawnX, launch.spawnY, emitterR * 1.45, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.globalAlpha = (0.78 + grow * 0.22) * fadeAlpha;
-                ctx.fillStyle = laserCore;
+
+                ctx.globalAlpha = 0.94 * fadeAlpha;
+                ctx.fillStyle = '#FFFFFF';
                 ctx.beginPath();
-                ctx.arc(launch.spawnX, launch.spawnY, emitterR * 0.62, 0, Math.PI * 2);
+                ctx.arc(launch.spawnX, launch.spawnY, 1.8 + grow * 1.3, 0, Math.PI * 2);
                 ctx.fill();
 
-                if (grow > 0.2 && s.handHoldActive) {
+                if (grow > 0.08 && s.handHoldActive) {
+                  const apR = 8.5 + grow * 5.5;
                   ctx.save();
                   ctx.translate(launch.spawnX, launch.spawnY);
-                  ctx.rotate(now * 0.006);
-                  ctx.globalAlpha = Math.min(0.85, (grow - 0.15) * 0.95) * fadeAlpha;
+                  ctx.rotate(now * 0.0055);
+                  ctx.globalAlpha = Math.min(0.82, 0.32 + grow * 0.5) * fadeAlpha;
                   ctx.strokeStyle = laserColor;
-                  ctx.lineWidth = 1.6 + grow * 1.4;
-                  ctx.setLineDash([5, 6]);
-                  ctx.beginPath();
-                  ctx.arc(0, 0, emitterR * 1.75, 0, Math.PI * 2);
-                  ctx.stroke();
+                  ctx.lineWidth = 0.95;
+                  for (let qi = 0; qi < 4; qi++) {
+                    const qa = (qi * Math.PI) / 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, apR, qa - 0.32, qa + 0.32);
+                    ctx.stroke();
+                  }
                   ctx.restore();
                 }
 
-                // Outer laser bloom (starts tight on tap, swells dramatically as hold is maintained)
+                // Layer 1: Delicate atmospheric laser sheath (sleek, never chunky)
                 traceLaser();
-                ctx.globalAlpha = ((hitKind === 'slot' ? 0.26 : 0.18) + grow * 0.26) * fadeAlpha;
+                ctx.globalAlpha = ((hitKind === 'slot' ? 0.2 : 0.13) + grow * 0.14) * fadeAlpha;
                 ctx.strokeStyle = laserColor;
-                ctx.lineWidth = (isStraightLaser ? 4.5 : 5.2) + grow * 19.5 + (hitKind === 'slot' ? 3.5 : 0);
+                ctx.lineWidth = (isStraightLaser ? 4.2 : 4.6) + grow * 4.8 + (hitKind === 'slot' ? 1.6 : 0);
                 ctx.stroke();
 
-                // Crisp beam body (starts razor-thin at tap, thickens into a heavy beam as maintained)
+                // Layer 2: Crisp prism mid-aura
                 traceLaser();
-                ctx.globalAlpha = (0.78 + grow * 0.22) * fadeAlpha;
-                ctx.strokeStyle = laserColor;
-                ctx.lineWidth = (isStraightLaser ? 1.8 : 2.1) + grow * 7.8 + (hitKind === 'slot' ? 1.5 : 0);
-                if (isStraightLaser || elev >= 0.45 || grow >= 0.32) {
+                ctx.globalAlpha = (0.34 + grow * 0.22) * fadeAlpha;
+                ctx.strokeStyle = beamGrad;
+                ctx.lineWidth = (isStraightLaser ? 2.0 : 2.2) + grow * 2.2 + (hitKind === 'slot' ? 0.6 : 0);
+                ctx.stroke();
+
+                // Layer 3: Razor-thin primary laser beam (1.1px -> 2.6px)
+                traceLaser();
+                ctx.globalAlpha = (0.9 + grow * 0.1) * fadeAlpha;
+                ctx.strokeStyle = beamGrad;
+                ctx.lineWidth = (isStraightLaser ? 1.05 : 1.2) + grow * 1.35 + (hitKind === 'slot' ? 0.45 : 0);
+                if (isStraightLaser || elev >= 0.42 || grow >= 0.26) {
                   ctx.setLineDash([]);
                 } else {
-                  ctx.setLineDash([12, 8]);
-                  ctx.lineDashOffset = -(now * (0.065 + launch.profile.sweepRate * 0.012 + dynEnergy * 0.08));
+                  ctx.setLineDash([10, 6]);
+                  ctx.lineDashOffset = -(now * (0.075 + launch.profile.sweepRate * 0.012 + dynEnergy * 0.08));
                 }
                 ctx.stroke();
 
-                // Luminous inner filament
+                // Layer 4: Incandescent specular hairline core (0.55px -> 1.15px)
                 traceLaser();
-                ctx.globalAlpha = (0.72 + grow * 0.28) * fadeAlpha;
-                ctx.strokeStyle = laserCore;
-                ctx.lineWidth = 0.9 + grow * 3.4;
-                if (isStraightLaser || elev >= 0.45 || grow >= 0.32) {
-                  ctx.setLineDash([16, 10]);
-                  ctx.lineDashOffset = -(now * (0.14 + dynEnergy * 0.18));
+                ctx.globalAlpha = (0.86 + grow * 0.14) * fadeAlpha;
+                ctx.strokeStyle = '#FFFFFF';
+                ctx.lineWidth = 0.55 + grow * 0.6;
+                if (isStraightLaser || elev >= 0.42 || grow >= 0.26) {
+                  ctx.setLineDash([]);
                 } else {
-                  ctx.setLineDash([6, 14]);
-                  ctx.lineDashOffset = -(now * (0.065 + launch.profile.sweepRate * 0.012));
+                  ctx.setLineDash([7, 9]);
+                  ctx.lineDashOffset = -(now * (0.14 + dynEnergy * 0.18));
                 }
                 ctx.stroke();
                 ctx.setLineDash([]);
 
-                // Animated traveling laser pulses/beads scaling up with hold
-                const beadSpeed = (isStraightLaser ? 0.0036 : 0.0022) * (1 + dynEnergy * 1.25);
-                const beadPhase = (now * beadSpeed) % 1;
-                for (let bi = 0; bi < 4; bi++) {
-                  const frac = (beadPhase + bi * 0.25) % 1;
+                // Sleek directional photon needles gliding along the trajectory tangent
+                const needleSpeed = (isStraightLaser ? 0.0038 : 0.0024) * (1 + dynEnergy * 1.25);
+                const needlePhase = (now * needleSpeed) % 1;
+                for (let bi = 0; bi < 5; bi++) {
+                  const frac = (needlePhase + bi * 0.2) % 1;
                   const idx = Math.min(visiblePts.length - 1, Math.floor(frac * (visiblePts.length - 1)));
+                  const idxNext = Math.min(visiblePts.length - 1, idx + 1);
+                  const idxPrev = Math.max(0, idx - 1);
                   const bp = visiblePts[idx];
-                  ctx.globalAlpha = Math.sin(frac * Math.PI) * 0.95 * fadeAlpha;
+                  const tx = visiblePts[idxNext].x - visiblePts[idxPrev].x;
+                  const ty = visiblePts[idxNext].y - visiblePts[idxPrev].y;
+                  const tLen = Math.hypot(tx, ty) || 1;
+                  const ux = tx / tLen;
+                  const uy = ty / tLen;
+                  const needleHalf = 4.5 + grow * 5.5;
+                  const envAlpha = Math.sin(frac * Math.PI) * 0.92 * fadeAlpha;
+
+                  ctx.globalAlpha = envAlpha;
+                  ctx.strokeStyle = '#FFFFFF';
+                  ctx.lineWidth = 1.05 + grow * 0.65;
+                  ctx.beginPath();
+                  ctx.moveTo(bp.x - ux * needleHalf, bp.y - uy * needleHalf);
+                  ctx.lineTo(bp.x + ux * needleHalf, bp.y + uy * needleHalf);
+                  ctx.stroke();
+
+                  ctx.globalAlpha = envAlpha * 0.7;
                   ctx.fillStyle = laserCore;
                   ctx.beginPath();
-                  ctx.arc(bp.x, bp.y, 2.0 + grow * 5.4 + (hitKind === 'slot' ? 1.2 : 0), 0, Math.PI * 2);
+                  ctx.arc(bp.x + ux * needleHalf * 0.6, bp.y + uy * needleHalf * 0.6, 1.15 + grow * 0.65, 0, Math.PI * 2);
                   ctx.fill();
                 }
 
-                // Subtle Low-to-Top Elevation Track Guide along the aim column while holding
+                // Refined local vertical elevation scale around target column while holding
                 if (s.handHoldActive) {
-                  ctx.save();
-                  ctx.globalAlpha = 0.28 + grow * 0.18;
-                  ctx.strokeStyle = laserColor;
-                  ctx.lineWidth = 1.4 + grow * 0.8;
-                  ctx.setLineDash([4, 6]);
-                  ctx.beginPath();
-                  ctx.moveTo(launch.targetX, FLOOR_Y - 14);
-                  ctx.lineTo(launch.targetX, 76);
-                  ctx.stroke();
-                  ctx.setLineDash([]);
+                  const guideTop = Math.max(76, launch.targetY - 125);
+                  const guideBot = Math.min(FLOOR_Y - 14, launch.targetY + 125);
+                  const guideGrad = ctx.createLinearGradient(launch.targetX, guideTop, launch.targetX, guideBot);
+                  guideGrad.addColorStop(0, 'rgba(255,255,255,0)');
+                  guideGrad.addColorStop(0.5, laserColor);
+                  guideGrad.addColorStop(1, 'rgba(255,255,255,0)');
 
-                  ctx.globalAlpha = 0.85;
-                  ctx.fillStyle = laserCore;
-                  ctx.strokeStyle = laserColor;
-                  ctx.lineWidth = 1.8 + grow * 0.8;
+                  ctx.save();
+                  ctx.globalAlpha = 0.34 + grow * 0.16;
+                  ctx.strokeStyle = guideGrad;
+                  ctx.lineWidth = 0.95;
                   ctx.beginPath();
-                  ctx.arc(launch.targetX, launch.targetY, 4.2 + grow * 3.0, 0, Math.PI * 2);
+                  ctx.moveTo(launch.targetX, guideTop);
+                  ctx.lineTo(launch.targetX, guideBot);
+                  ctx.stroke();
+
+                  // Crisp diamond elevation cursor
+                  const dia = 3.8 + grow * 1.4;
+                  ctx.globalAlpha = 0.88;
+                  ctx.fillStyle = '#FFFFFF';
+                  ctx.strokeStyle = laserColor;
+                  ctx.lineWidth = 1.25;
+                  ctx.beginPath();
+                  ctx.moveTo(launch.targetX, launch.targetY - dia);
+                  ctx.lineTo(launch.targetX + dia, launch.targetY);
+                  ctx.lineTo(launch.targetX, launch.targetY + dia);
+                  ctx.lineTo(launch.targetX - dia, launch.targetY);
+                  ctx.closePath();
                   ctx.fill();
                   ctx.stroke();
                   ctx.restore();
                 }
 
-                // Tip Flare & Impact / Sync Reticle (grows as beam reaches & charges)
-                const tipPt = visiblePts[visiblePts.length - 1];
+                // Precision Tip Flare & Optical Caliper Lock Reticle
                 const retX = fullReach && hitKind !== 'none' ? impactX : tipPt.x;
                 const retY = fullReach && hitKind !== 'none' ? impactY : tipPt.y;
 
+                const tipHaloR = (7 + grow * 6.5) * (hitKind === 'slot' ? 1.25 : 1);
+                const tipGlow = ctx.createRadialGradient(retX, retY, 0.5, retX, retY, tipHaloR);
+                tipGlow.addColorStop(0, '#FFFFFF');
+                tipGlow.addColorStop(0.35, laserCore);
+                tipGlow.addColorStop(0.7, laserColor);
+                tipGlow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                ctx.globalAlpha = 0.85 * fadeAlpha;
+                ctx.fillStyle = tipGlow;
+                ctx.beginPath();
+                ctx.arc(retX, retY, tipHaloR, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.globalAlpha = 0.96 * fadeAlpha;
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(retX, retY, 1.8 + grow * 1.2, 0, Math.PI * 2);
+                ctx.fill();
+
                 if (fullReach && hitKind === 'slot') {
-                  const pulse = 1 + 0.12 * Math.sin(now * 0.02);
-                  ctx.globalAlpha = 0.95 * fadeAlpha;
+                  const pulse = 1 + 0.08 * Math.sin(now * 0.022);
+                  const lockR = (13 + grow * 5) * pulse;
+                  ctx.save();
+                  ctx.translate(retX, retY);
+                  ctx.rotate(now * 0.003);
+                  ctx.globalAlpha = 0.94 * fadeAlpha;
                   ctx.strokeStyle = '#15803D';
-                  ctx.lineWidth = 2.6 + grow * 1.6;
-                  ctx.beginPath();
-                  ctx.arc(retX, retY, (18 + grow * 10) * pulse, 0, Math.PI * 2);
-                  ctx.stroke();
-
-                  ctx.fillStyle = '#15803D';
-                  ctx.font = '800 13px "JetBrains Mono", monospace';
-                  ctx.textAlign = 'center';
-                  ctx.fillText(chg >= 0.72 ? 'POWER SYNC!' : 'SYNC!', retX, retY - (48 + grow * 14));
-                } else {
-                  ctx.globalAlpha = 0.85 * fadeAlpha;
-                  ctx.fillStyle = fullReach && hitKind === 'body' ? '#F59E0B' : laserColor;
-                  ctx.beginPath();
-                  ctx.arc(retX, retY, 3.6 + grow * 8.2, 0, Math.PI * 2);
-                  ctx.fill();
-                  ctx.strokeStyle = '#FFFBEB';
-                  ctx.lineWidth = 1.4 + grow * 0.8;
-                  ctx.stroke();
-
-                  if (grow > 0.06) {
-                    const lockR = 14 + grow * 22;
-                    ctx.save();
-                    ctx.translate(retX, retY);
-                    ctx.rotate(now * 0.004 * (1 + dynEnergy * 2));
-                    ctx.globalAlpha = (0.42 + grow * 0.45) * fadeAlpha;
-                    ctx.strokeStyle = laserColor;
-                    ctx.lineWidth = 1.6 + grow * 1.6;
-                    ctx.setLineDash([8, 6]);
+                  ctx.lineWidth = 1.45;
+                  for (let qi = 0; qi < 4; qi++) {
+                    const qa = (qi * Math.PI) / 2;
                     ctx.beginPath();
-                    ctx.arc(0, 0, lockR, 0, Math.PI * 2);
+                    ctx.arc(0, 0, lockR, qa - 0.36, qa + 0.36);
                     ctx.stroke();
-                    ctx.restore();
                   }
+                  ctx.strokeStyle = '#FEF08A';
+                  ctx.lineWidth = 1.0;
+                  ctx.beginPath();
+                  ctx.moveTo(0, -lockR * 0.62);
+                  ctx.lineTo(lockR * 0.62, 0);
+                  ctx.lineTo(0, lockR * 0.62);
+                  ctx.lineTo(-lockR * 0.62, 0);
+                  ctx.closePath();
+                  ctx.stroke();
+                  ctx.restore();
+
+                  ctx.globalAlpha = 0.96 * fadeAlpha;
+                  ctx.fillStyle = '#15803D';
+                  ctx.font = '700 11px "JetBrains Mono", monospace';
+                  ctx.textAlign = 'center';
+                  ctx.fillText(chg >= 0.72 ? 'MAX SYNC' : 'SYNC', retX, retY - (38 + grow * 10));
+                } else if (fullReach && hitKind === 'locked') {
+                  const lockR = 14 + grow * 5;
+                  ctx.save();
+                  ctx.translate(retX, retY);
+                  ctx.globalAlpha = 0.92 * fadeAlpha;
+                  ctx.strokeStyle = '#DC2626';
+                  ctx.lineWidth = 1.5;
+                  ctx.beginPath();
+                  ctx.arc(0, 0, lockR, 0, Math.PI * 2);
+                  ctx.moveTo(-lockR * 0.7, -lockR * 0.7);
+                  ctx.lineTo(lockR * 0.7, lockR * 0.7);
+                  ctx.stroke();
+                  ctx.restore();
+
+                  ctx.globalAlpha = 0.96 * fadeAlpha;
+                  ctx.fillStyle = '#DC2626';
+                  ctx.font = '700 10.5px "JetBrains Mono", monospace';
+                  ctx.textAlign = 'center';
+                  ctx.fillText('SEALED', retX, retY - (38 + grow * 10));
+                } else if (grow > 0.04) {
+                  const lockR = 11 + grow * 7;
+                  ctx.save();
+                  ctx.translate(retX, retY);
+                  ctx.rotate(now * 0.004 * (1 + dynEnergy * 1.8));
+                  ctx.globalAlpha = (0.52 + grow * 0.36) * fadeAlpha;
+                  ctx.strokeStyle = laserColor;
+                  ctx.lineWidth = 1.1;
+                  for (let qi = 0; qi < 4; qi++) {
+                    const qa = (qi * Math.PI) / 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, lockR, qa - 0.32, qa + 0.32);
+                    ctx.stroke();
+                  }
+                  ctx.restore();
                 }
               }
               ctx.restore();
@@ -6065,7 +8167,64 @@ export function PiggyDuelPlugin({
             }
           }
 
-          // Dash Afterimages
+          // Sleek Tapered Hand Slipstream Ribbon
+          for (let i = s.handTrail.length - 1; i >= 0; i--) {
+            s.handTrail[i].life -= rawDt;
+            if (s.handTrail[i].life <= 0) {
+              s.handTrail.splice(i, 1);
+            }
+          }
+          if (s.handTrail.length >= 2) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            const bounceHandActive = s.bounceBuffTimer > 0 && s.phase === 'PLAYING';
+            for (let ti = 1; ti < s.handTrail.length; ti++) {
+              const p0 = s.handTrail[ti - 1];
+              const p1 = s.handTrail[ti];
+              const frac = ti / (s.handTrail.length - 1);
+              const lifeFrac = Math.min(p0.life / p0.maxLife, p1.life / p1.maxLife);
+              const alpha = frac * lifeFrac * (p1.isDash ? 0.56 : 0.34);
+              const w = (0.4 + frac * (p1.isDash ? 2.6 : 1.7)) * lifeFrac;
+              ctx.globalAlpha = alpha;
+              ctx.strokeStyle = p1.isDash ? '#38BDF8' : bounceHandActive ? '#10B981' : '#D97706';
+              ctx.lineWidth = w;
+              ctx.beginPath();
+              ctx.moveTo(p0.x, p0.y);
+              ctx.lineTo(p1.x, p1.y);
+              ctx.stroke();
+
+              if (bounceHandActive && frac > 0.2) {
+                const dx = p1.x - p0.x;
+                const dy = p1.y - p0.y;
+                const segL = Math.hypot(dx, dy) || 1;
+                const nx = -dy / segL;
+                const ny = dx / segL;
+                const wave0 = Math.sin((ti - 1) * 1.1 - now * 0.02) * 5.2 * frac;
+                const wave1 = Math.sin(ti * 1.1 - now * 0.02) * 5.2 * frac;
+                ctx.globalAlpha = alpha * 0.9;
+                ctx.strokeStyle = '#6EE7B7';
+                ctx.lineWidth = Math.max(0.8, w * 0.72);
+                ctx.beginPath();
+                ctx.moveTo(p0.x + nx * wave0, p0.y + ny * wave0);
+                ctx.lineTo(p1.x + nx * wave1, p1.y + ny * wave1);
+                ctx.stroke();
+              }
+
+              if (p1.isDash && frac > 0.35) {
+                ctx.globalAlpha = alpha * 0.8;
+                ctx.strokeStyle = '#FFFFFF';
+                ctx.lineWidth = Math.max(0.45, w * 0.36);
+                ctx.beginPath();
+                ctx.moveTo(p0.x, p0.y);
+                ctx.lineTo(p1.x, p1.y);
+                ctx.stroke();
+              }
+            }
+            ctx.restore();
+          }
+
+          // Sleek Kinetic Dash & Glide Afterimages (hairline directional speed rings + streaks)
           for (let i = s.afterimages.length - 1; i >= 0; i--) {
             const ai = s.afterimages[i];
             ai.life -= rawDt;
@@ -6073,12 +8232,27 @@ export function PiggyDuelPlugin({
               s.afterimages.splice(i, 1);
               continue;
             }
+            const t = ai.life / ai.maxLife;
+            const ang = ai.ang ?? 0;
             ctx.save();
-            ctx.globalAlpha = (ai.life / ai.maxLife) * 0.4;
-            ctx.fillStyle = '#38BDF8';
+            ctx.translate(ai.x, ai.y);
+            ctx.rotate(ang);
+            ctx.globalAlpha = t * (ai.isDash ? 0.52 : 0.34);
+            ctx.strokeStyle = ai.isDash ? '#38BDF8' : '#F59E0B';
+            ctx.lineWidth = 1.15;
             ctx.beginPath();
-            ctx.arc(ai.x, ai.y, 26, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.ellipse(0, 0, 18 + (1 - t) * 8, 11 + (1 - t) * 4, 0, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.globalAlpha = t * 0.65;
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 0.85;
+            ctx.beginPath();
+            ctx.moveTo(-22, -4);
+            ctx.lineTo(-8, -4);
+            ctx.moveTo(-26, 4);
+            ctx.lineTo(-10, 4);
+            ctx.stroke();
             ctx.restore();
           }
 
@@ -6093,17 +8267,127 @@ export function PiggyDuelPlugin({
               ctx.save();
               ctx.globalAlpha = expireFade;
               ctx.lineCap = 'round';
-              for (let ti = 1; ti < p.trail.length; ti++) {
-                const tf = ti / p.trail.length;
-                ctx.strokeStyle =
-                  pwr >= 0.72
+              ctx.lineJoin = 'round';
+
+              if (p.superBounce) {
+                // Distinct Bouncy Coin Signature Trail:
+                // 1) Soft Mint-Emerald outer ribbon + 2) Braided Double-Helix Spring strands + 3) Spark beads & Rebound knots
+                const pts = [...p.trail, { x: p.x, y: p.y }];
+                const nPts = pts.length;
+                const strandA: { x: number; y: number }[] = [];
+                const strandB: { x: number; y: number }[] = [];
+                let cumDist = 0;
+
+                for (let ti = 0; ti < nPts; ti++) {
+                  const cur = pts[ti];
+                  const prev = pts[Math.max(0, ti - 1)];
+                  const next = pts[Math.min(nPts - 1, ti + 1)];
+                  if (ti > 0) {
+                    cumDist += Math.hypot(cur.x - prev.x, cur.y - prev.y);
+                  }
+                  const dx = next.x - prev.x;
+                  const dy = next.y - prev.y;
+                  const segLen = Math.hypot(dx, dy) || 1;
+                  const nx = -dy / segLen;
+                  const ny = dx / segLen;
+                  const tf = ti / Math.max(1, nPts - 1);
+                  // Pinch wave smoothly near tail and at sharp rebound corners for a coiled spring silhouette
+                  const knotDamp = cur.bounce ? 0.25 : 1;
+                  const amp = (2.5 + tf * 10.5) * expireShrink * knotDamp;
+                  const phase = cumDist * 0.095 - now * 0.018;
+                  const off = Math.sin(phase) * amp;
+                  strandA.push({ x: cur.x + nx * off, y: cur.y + ny * off });
+                  strandB.push({ x: cur.x - nx * off, y: cur.y - ny * off });
+                }
+
+                // Layer 1: Tapered Emerald Glow Envelope
+                for (let ti = 1; ti < nPts; ti++) {
+                  const tf = ti / (nPts - 1);
+                  ctx.strokeStyle = `rgba(16, 185, 129, ${(0.08 + tf * 0.28).toFixed(3)})`;
+                  ctx.lineWidth = (2.6 + tf * 13.5) * expireShrink;
+                  ctx.beginPath();
+                  ctx.moveTo(pts[ti - 1].x, pts[ti - 1].y);
+                  ctx.lineTo(pts[ti].x, pts[ti].y);
+                  ctx.stroke();
+                }
+
+                // Layer 2: Braided Spring Double-Helix Strands (Mint + Luminous Gold-Lime)
+                for (let ti = 1; ti < nPts; ti++) {
+                  const tf = ti / (nPts - 1);
+                  ctx.strokeStyle = `rgba(52, 211, 153, ${(0.22 + tf * 0.72).toFixed(3)})`;
+                  ctx.lineWidth = (1.3 + tf * 2.7) * expireShrink;
+                  ctx.beginPath();
+                  ctx.moveTo(strandA[ti - 1].x, strandA[ti - 1].y);
+                  ctx.lineTo(strandA[ti].x, strandA[ti].y);
+                  ctx.stroke();
+
+                  ctx.strokeStyle = `rgba(254, 240, 138, ${(0.18 + tf * 0.68).toFixed(3)})`;
+                  ctx.lineWidth = (1.1 + tf * 2.2) * expireShrink;
+                  ctx.beginPath();
+                  ctx.moveTo(strandB[ti - 1].x, strandB[ti - 1].y);
+                  ctx.lineTo(strandB[ti].x, strandB[ti].y);
+                  ctx.stroke();
+                }
+
+                // Layer 3: Crisp Inner White-Mint Core Filament
+                for (let ti = 1; ti < nPts; ti++) {
+                  const tf = ti / (nPts - 1);
+                  ctx.strokeStyle = `rgba(236, 253, 245, ${(0.12 + tf * 0.65).toFixed(3)})`;
+                  ctx.lineWidth = Math.max(0.9, tf * 2.4 * expireShrink);
+                  ctx.beginPath();
+                  ctx.moveTo(pts[ti - 1].x, pts[ti - 1].y);
+                  ctx.lineTo(pts[ti].x, pts[ti].y);
+                  ctx.stroke();
+                }
+
+                // Layer 4: Periodic Spring Energy Beads + Crisp Rebound Anchor Knots
+                for (let ti = 2; ti < nPts - 1; ti++) {
+                  const pt = pts[ti];
+                  const tf = ti / (nPts - 1);
+                  if (pt.bounce) {
+                    ctx.save();
+                    ctx.translate(pt.x, pt.y);
+                    ctx.globalAlpha = expireFade * (0.45 + tf * 0.5);
+                    ctx.strokeStyle = '#FEF08A';
+                    ctx.fillStyle = '#10B981';
+                    ctx.lineWidth = 1.8;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, (4.2 + tf * 2.4) * expireShrink, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.restore();
+                  } else if (ti % 4 === 0) {
+                    const bead = (ti / 4) % 2 === 0 ? strandA[ti] : strandB[ti];
+                    ctx.fillStyle = (ti / 4) % 2 === 0 ? '#A7F3D0' : '#FEF08A';
+                    ctx.globalAlpha = expireFade * tf * 0.85;
+                    ctx.beginPath();
+                    ctx.arc(bead.x, bead.y, (1.6 + tf * 1.9) * expireShrink, 0, Math.PI * 2);
+                    ctx.fill();
+                  }
+                }
+              } else {
+                for (let ti = 1; ti < p.trail.length; ti++) {
+                  const tf = ti / p.trail.length;
+                  ctx.strokeStyle = p.uziShot
+                    ? `rgba(249, 115, 22, ${(tf * 0.65).toFixed(3)})`
+                    : pwr >= 0.72
                     ? `rgba(56, 189, 248, ${(tf * 0.54).toFixed(3)})`
                     : `rgba(245, 158, 11, ${(tf * 0.38).toFixed(3)})`;
-                ctx.lineWidth = Math.max(1.8, tf * (9.5 + pwr * 5) * expireShrink);
-                ctx.beginPath();
-                ctx.moveTo(p.trail[ti - 1].x, p.trail[ti - 1].y);
-                ctx.lineTo(p.trail[ti].x, p.trail[ti].y);
-                ctx.stroke();
+                  ctx.lineWidth = Math.max(1.8, tf * (9.5 + pwr * 5 + (p.uziShot ? 2.5 : 0)) * expireShrink);
+                  ctx.beginPath();
+                  ctx.moveTo(p.trail[ti - 1].x, p.trail[ti - 1].y);
+                  ctx.lineTo(p.trail[ti].x, p.trail[ti].y);
+                  ctx.stroke();
+
+                  if (p.uziShot && tf > 0.3) {
+                    ctx.strokeStyle = `rgba(254, 240, 138, ${(tf * 0.72).toFixed(3)})`;
+                    ctx.lineWidth = Math.max(0.9, tf * 3.0 * expireShrink);
+                    ctx.beginPath();
+                    ctx.moveTo(p.trail[ti - 1].x, p.trail[ti - 1].y);
+                    ctx.lineTo(p.trail[ti].x, p.trail[ti].y);
+                    ctx.stroke();
+                  }
+                }
               }
               ctx.restore();
             }
@@ -6117,7 +8401,7 @@ export function PiggyDuelPlugin({
               const haloR = p.r * (1.25 + (1 - expireFade) * 1.45);
               ctx.save();
               ctx.globalAlpha = expireFade * 0.72;
-              ctx.strokeStyle = '#FDE68A';
+              ctx.strokeStyle = p.superBounce ? '#6EE7B7' : '#FDE68A';
               ctx.lineWidth = 2.4 * expireFade;
               ctx.beginPath();
               ctx.arc(0, 0, haloR, 0, Math.PI * 2);
@@ -6125,14 +8409,33 @@ export function PiggyDuelPlugin({
               ctx.restore();
             }
 
-            // Warm subtle aura behind active coin (radiant sky-gold for charged power coins)
-            const coinAura = ctx.createRadialGradient(0, 0, p.r * 0.2, 0, 0, p.r * (1.65 + (p.power ?? 0) * 0.55));
-            coinAura.addColorStop(0, (p.power ?? 0) >= 0.72 ? 'rgba(56, 189, 248, 0.36)' : 'rgba(253, 224, 71, 0.24)');
+            // Warm subtle aura behind active coin (spring-emerald for superBounce, sky-gold for charged power coins)
+            const coinAura = ctx.createRadialGradient(0, 0, p.r * 0.2, 0, 0, p.r * (1.65 + (p.power ?? 0) * 0.55 + (p.superBounce ? 0.35 : 0)));
+            coinAura.addColorStop(
+              0,
+              p.superBounce
+                ? 'rgba(16, 185, 129, 0.44)'
+                : (p.power ?? 0) >= 0.72
+                ? 'rgba(56, 189, 248, 0.36)'
+                : 'rgba(253, 224, 71, 0.24)'
+            );
             coinAura.addColorStop(1, 'rgba(245, 158, 11, 0)');
             ctx.fillStyle = coinAura;
             ctx.beginPath();
-            ctx.arc(0, 0, p.r * (1.65 + (p.power ?? 0) * 0.55), 0, Math.PI * 2);
+            ctx.arc(0, 0, p.r * (1.65 + (p.power ?? 0) * 0.55 + (p.superBounce ? 0.35 : 0)), 0, Math.PI * 2);
             ctx.fill();
+
+            if (p.superBounce) {
+              ctx.save();
+              ctx.rotate(-now * 0.006);
+              ctx.strokeStyle = 'rgba(52, 211, 153, 0.85)';
+              ctx.lineWidth = 1.6;
+              ctx.setLineDash([5, 4]);
+              ctx.beginPath();
+              ctx.arc(0, 0, p.r * 1.24 * expireShrink, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+            }
 
             ctx.rotate((p.rot * Math.PI) / 180);
             ctx.scale(expireShrink, expireShrink);
@@ -6156,6 +8459,158 @@ export function PiggyDuelPlugin({
                 ctx.fillText('$', 0, 1);
               }
             }
+            ctx.restore();
+          }
+
+          // Vault Seal Dome & Deflector Shutter over Coin Slot during DOLLAR_BARRAGE
+          if (s.dollarCinematic > 0.03 && s.bossAction !== 'BREAKING') {
+            const dc = s.dollarCinematic;
+            ctx.save();
+            ctx.translate(slotPos.x, slotPos.y);
+            const shieldR = 44 + Math.sin(now * 0.012) * 2.5;
+
+            // Emerald-gold deflector dome gradient
+            const domeGrad = ctx.createRadialGradient(0, 0, 8, 0, 0, shieldR);
+            domeGrad.addColorStop(0, `rgba(21, 128, 61, ${(0.24 * dc).toFixed(3)})`);
+            domeGrad.addColorStop(0.65, `rgba(34, 197, 94, ${(0.18 * dc).toFixed(3)})`);
+            domeGrad.addColorStop(1, 'rgba(251, 191, 36, 0)');
+            ctx.fillStyle = domeGrad;
+            ctx.beginPath();
+            ctx.arc(0, 0, shieldR, Math.PI, 0);
+            ctx.closePath();
+            ctx.fill();
+
+            // Rotating brass & emerald vault-lock aperture rings
+            ctx.save();
+            ctx.rotate(now * 0.0045);
+            ctx.globalAlpha = 0.85 * dc;
+            ctx.strokeStyle = '#15803D';
+            ctx.lineWidth = 2.0;
+            for (let qi = 0; qi < 4; qi++) {
+              const qa = (qi * Math.PI) / 2;
+              ctx.beginPath();
+              ctx.arc(0, 0, 32, qa - 0.42, qa + 0.42);
+              ctx.stroke();
+            }
+            ctx.restore();
+
+            ctx.save();
+            ctx.rotate(-now * 0.0032);
+            ctx.globalAlpha = 0.78 * dc;
+            ctx.strokeStyle = '#FBBF24';
+            ctx.lineWidth = 1.4;
+            ctx.setLineDash([6, 6]);
+            ctx.beginPath();
+            ctx.arc(0, 0, 39, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+
+            // Heavy brass vault shutter cross-bar sealing the slot slit
+            ctx.globalAlpha = 0.94 * dc;
+            ctx.fillStyle = '#231A10';
+            ctx.strokeStyle = '#FBBF24';
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.roundRect(-22, -5, 44, 10, 5);
+            ctx.fill();
+            ctx.stroke();
+
+            // Crisp emerald lock pip at center of shutter
+            ctx.fillStyle = '#4ADE80';
+            ctx.beginPath();
+            ctx.arc(0, 0, 3.2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Subtle countdown arc showing remaining lockdown duration
+            if (s.bossAction === 'DOLLAR_BARRAGE' && s.dollarDuration > 0) {
+              const remFrac = Math.max(0, Math.min(1, s.dollarTimer / s.dollarDuration));
+              ctx.strokeStyle = '#4ADE80';
+              ctx.lineWidth = 2.2;
+              ctx.lineCap = 'round';
+              ctx.beginPath();
+              ctx.arc(0, 0, 45, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * remFrac);
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+
+          // 3D Perspective Fluttering Thrown Dollar Bills (with silk wake & foil sheen)
+          for (const d of s.thrownDollars) {
+            const fade = d.life < 0.28 ? Math.max(0, d.life / 0.28) : 1;
+            const isGold = d.kind === 'gold_note';
+
+            if (d.trail.length >= 2) {
+              ctx.save();
+              ctx.lineCap = 'round';
+              for (let ti = 1; ti < d.trail.length; ti++) {
+                const tf = ti / d.trail.length;
+                ctx.globalAlpha = tf * fade * 0.28;
+                ctx.strokeStyle = isGold ? '#FBBF24' : '#4ADE80';
+                ctx.lineWidth = 1.2 + tf * 2.2;
+                ctx.beginPath();
+                ctx.moveTo(d.trail[ti - 1].x, d.trail[ti - 1].y);
+                ctx.lineTo(d.trail[ti].x, d.trail[ti].y);
+                ctx.stroke();
+              }
+              ctx.restore();
+            }
+
+            const flipScale = Math.cos(d.flutterPhase);
+            const absFlip = Math.max(0.18, Math.abs(flipScale));
+            const isFront = flipScale >= 0;
+
+            ctx.save();
+            ctx.globalAlpha = fade * (0.88 + 0.12 * absFlip);
+            ctx.translate(d.x, d.y);
+            ctx.rotate((d.rot * Math.PI) / 180);
+            ctx.scale(1, absFlip);
+
+            const bw = d.w;
+            const bh = d.h;
+            // Subtle drop shadow under tumbling bill
+            ctx.fillStyle = 'rgba(35, 26, 16, 0.16)';
+            ctx.fillRect(-bw / 2 + 2, -bh / 2 + 3, bw, bh);
+
+            // Bill body (Emerald Treasury Note or Gold Reserve Note)
+            ctx.fillStyle = isGold
+              ? isFront
+                ? '#FEF08A'
+                : '#FDE047'
+              : isFront
+              ? '#BBF7D0'
+              : '#86EFAC';
+            ctx.strokeStyle = isGold ? '#B45309' : '#15803D';
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.roundRect(-bw / 2, -bh / 2, bw, bh, 2.5);
+            ctx.fill();
+            ctx.stroke();
+
+            // Inner engraved treasury border
+            ctx.strokeStyle = isGold ? 'rgba(146, 64, 14, 0.65)' : 'rgba(21, 128, 61, 0.65)';
+            ctx.lineWidth = 0.85;
+            ctx.strokeRect(-bw / 2 + 3.5, -bh / 2 + 3, bw - 7, bh - 6);
+
+            // Center medallion + $ emblem
+            ctx.fillStyle = isGold ? 'rgba(217, 119, 6, 0.18)' : 'rgba(22, 163, 74, 0.16)';
+            ctx.beginPath();
+            ctx.arc(0, 0, bh * 0.34, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = isGold ? '#92400E' : '#14532D';
+            ctx.font = '800 13px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('$', 0, 0.5);
+
+            // Specular foil sheen sweep across the flipping bill
+            if (absFlip > 0.55) {
+              const sheenX = ((d.flutterPhase * 12) % (bw * 1.4)) - bw * 0.7;
+              ctx.globalAlpha = fade * (absFlip - 0.55) * 0.65;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(Math.max(-bw / 2 + 2, sheenX - 3), -bh / 2 + 1.5, 6, bh - 3);
+            }
+
             ctx.restore();
           }
 
@@ -6334,7 +8789,7 @@ export function PiggyDuelPlugin({
             ctx.restore();
           }
 
-          // Seam Fracture Rays during Overpressure Buildup + Expanding Shockwave Rings
+          // Seam Fracture Rays + Volumetric Golden Treasure Sunbeams during BREAKING
           if (s.bossAction === 'BREAKING') {
             const breakElapsed = Math.max(0, s.breakMax - s.breakTimer);
             if (breakElapsed > 0.06 && breakElapsed < 0.45) {
@@ -6366,6 +8821,46 @@ export function PiggyDuelPlugin({
               }
               ctx.restore();
             }
+
+            // Volumetric Golden Jackpot Lightshafts radiating upward behind raining coins
+            if (breakElapsed >= 0.36 && breakElapsed < 2.6) {
+              const shaftIn = Math.min(1, (breakElapsed - 0.36) / 0.16);
+              const shaftOut = breakElapsed > 1.85 ? Math.max(0, 1 - (breakElapsed - 1.85) / 0.75) : 1;
+              const shaftAlpha = 0.44 * shaftIn * shaftOut;
+              if (shaftAlpha > 0.01) {
+                ctx.save();
+                ctx.translate(s.breakPx, piggyCenterY);
+                const bloomG = ctx.createRadialGradient(0, 0, 12, 0, 0, 260);
+                bloomG.addColorStop(0, `rgba(254, 249, 195, ${(shaftAlpha * 1.15).toFixed(3)})`);
+                bloomG.addColorStop(0.45, `rgba(251, 191, 36, ${(shaftAlpha * 0.52).toFixed(3)})`);
+                bloomG.addColorStop(1, 'rgba(245, 158, 11, 0)');
+                ctx.fillStyle = bloomG;
+                ctx.beginPath();
+                ctx.arc(0, 0, 260, 0, Math.PI * 2);
+                ctx.fill();
+
+                for (let si = 0; si < 7; si++) {
+                  const spreadAng = -Math.PI * 0.85 + (si / 6) * Math.PI * 0.7 + Math.sin(breakElapsed * 1.3 + si) * 0.04;
+                  const sLen = 460 + (si % 2) * 140;
+                  ctx.save();
+                  ctx.rotate(spreadAng);
+                  const sg = ctx.createLinearGradient(0, 0, sLen, 0);
+                  sg.addColorStop(0, `rgba(254, 243, 199, ${(shaftAlpha * 0.9).toFixed(3)})`);
+                  sg.addColorStop(0.5, `rgba(251, 191, 36, ${(shaftAlpha * 0.34).toFixed(3)})`);
+                  sg.addColorStop(1, 'rgba(251, 191, 36, 0)');
+                  ctx.fillStyle = sg;
+                  ctx.beginPath();
+                  ctx.moveTo(0, -10);
+                  ctx.lineTo(sLen, -58);
+                  ctx.lineTo(sLen, 58);
+                  ctx.lineTo(0, 10);
+                  ctx.closePath();
+                  ctx.fill();
+                  ctx.restore();
+                }
+                ctx.restore();
+              }
+            }
           }
 
           for (let i = s.shockwaves.length - 1; i >= 0; i--) {
@@ -6391,6 +8886,121 @@ export function PiggyDuelPlugin({
             ctx.beginPath();
             ctx.arc(sw.x, sw.y, curR * 0.92, 0, Math.PI * 2);
             ctx.fill();
+            ctx.restore();
+          }
+
+          // Cinematic Jackpot Eruption Coins (exact same COIN_SPRITE_URL coins the player threw inside!)
+          for (const sc of s.spilledCoins) {
+            if (sc.delay > 0) continue;
+            const fadeOut = s.breakTimer < 0.45 ? Math.max(0, s.breakTimer / 0.45) : 1;
+            const lifeFade = sc.life < 0.35 ? Math.max(0, sc.life / 0.35) : 1;
+            const coinAlpha = Math.min(fadeOut, lifeFade);
+            if (coinAlpha <= 0.01) continue;
+
+            // Ground shadow below each airborne/settled spilled coin
+            const hAboveFloor = Math.max(0, FLOOR_Y - sc.r * 0.72 - sc.y);
+            if (hAboveFloor < 340) {
+              const sFrac = 1 - hAboveFloor / 340;
+              ctx.save();
+              ctx.globalAlpha = coinAlpha * 0.28 * sFrac;
+              ctx.fillStyle = '#231A10';
+              ctx.beginPath();
+              ctx.ellipse(sc.x, FLOOR_Y + 3, sc.r * (0.62 + 0.45 * sFrac), Math.max(2, sc.r * 0.2 * sFrac), 0, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+            }
+
+            // Sleek golden wake ribbon while flying at high velocity
+            if (sc.trail.length >= 2) {
+              ctx.save();
+              ctx.lineCap = 'round';
+              for (let ti = 1; ti < sc.trail.length; ti++) {
+                const tf = ti / sc.trail.length;
+                ctx.globalAlpha = coinAlpha * tf * 0.42;
+                ctx.strokeStyle = sc.power >= 0.72 ? '#38BDF8' : '#FBBF24';
+                ctx.lineWidth = Math.max(1.5, tf * (sc.r * 0.46));
+                ctx.beginPath();
+                ctx.moveTo(sc.trail[ti - 1].x, sc.trail[ti - 1].y);
+                ctx.lineTo(sc.trail[ti].x, sc.trail[ti].y);
+                ctx.stroke();
+              }
+              ctx.restore();
+            }
+
+            ctx.save();
+            ctx.globalAlpha = coinAlpha;
+            ctx.translate(sc.x, sc.y);
+
+            // Radiant golden or sky-charged aura halo
+            const auraR = sc.r * (sc.isPlayerStored ? 1.85 : 1.55);
+            const cAura = ctx.createRadialGradient(0, 0, sc.r * 0.2, 0, 0, auraR);
+            cAura.addColorStop(
+              0,
+              sc.power >= 0.72
+                ? 'rgba(56, 189, 248, 0.42)'
+                : sc.isPlayerStored
+                ? 'rgba(253, 224, 71, 0.4)'
+                : 'rgba(251, 191, 36, 0.26)'
+            );
+            cAura.addColorStop(1, 'rgba(245, 158, 11, 0)');
+            ctx.fillStyle = cAura;
+            ctx.beginPath();
+            ctx.arc(0, 0, auraR, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 3D tumbling spin foreshortening + metallic coin rim edge thickness
+            const flipCos = Math.cos(sc.flipPhase);
+            const flipScaleX = Math.max(0.24, Math.abs(flipCos));
+            ctx.rotate((sc.rot * Math.PI) / 180);
+
+            if (flipScaleX < 0.72) {
+              const rimShift = (flipCos >= 0 ? 1 : -1) * (1 - flipScaleX) * 4.5;
+              ctx.fillStyle = '#B45309';
+              ctx.beginPath();
+              ctx.ellipse(rimShift, 0, sc.r * flipScaleX, sc.r, 0, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            ctx.scale(flipScaleX, 1);
+            if (cImg && cImg.complete && cImg.naturalWidth > 0) {
+              const sz = sc.r * 2.25;
+              ctx.drawImage(cImg, -sz / 2, -sz / 2, sz, sz);
+            } else {
+              ctx.fillStyle = '#F59E0B';
+              ctx.strokeStyle = '#78350F';
+              ctx.lineWidth = 3;
+              ctx.beginPath();
+              ctx.arc(0, 0, sc.r, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+              ctx.fillStyle = '#78350F';
+              ctx.font = '800 18px Fraunces, serif';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('$', 0, 1);
+            }
+
+            // Crisp specular star glint as the spinning coin catches the light
+            const glintPeak = Math.sin(sc.glintPhase);
+            if (glintPeak > 0.72) {
+              const gAmt = (glintPeak - 0.72) / 0.28;
+              const gr = sc.r * 0.48 * gAmt;
+              ctx.scale(1 / flipScaleX, 1);
+              ctx.translate(-sc.r * 0.28, -sc.r * 0.28);
+              ctx.fillStyle = `rgba(255, 255, 255, ${(coinAlpha * 0.92).toFixed(3)})`;
+              ctx.beginPath();
+              ctx.moveTo(0, -gr);
+              ctx.lineTo(gr * 0.28, -gr * 0.28);
+              ctx.lineTo(gr, 0);
+              ctx.lineTo(gr * 0.28, gr * 0.28);
+              ctx.lineTo(0, gr);
+              ctx.lineTo(-gr * 0.28, gr * 0.28);
+              ctx.lineTo(-gr, 0);
+              ctx.lineTo(-gr * 0.28, -gr * 0.28);
+              ctx.closePath();
+              ctx.fill();
+            }
+
             ctx.restore();
           }
 
@@ -6719,49 +9329,277 @@ export function PiggyDuelPlugin({
             const shieldCol = s.ballMorph > 0.35 ? '#38BDF8' : s.nervousLevel > 0.4 ? '#EF4444' : '#F59E0B';
             ctx.save();
             ctx.translate(s.handContactX, s.handContactY);
-            ctx.globalAlpha = flashFrac * 0.85;
+            ctx.globalAlpha = flashFrac * 0.82;
             ctx.strokeStyle = shieldCol;
-            ctx.lineWidth = 4.5 * flashFrac;
+            ctx.lineWidth = 2.2 * flashFrac;
             ctx.lineCap = 'round';
             ctx.beginPath();
-            ctx.arc(0, 0, 26 + (1 - flashFrac) * 18, contactAng - 0.95, contactAng + 0.95);
+            ctx.arc(0, 0, 22 + (1 - flashFrac) * 14, contactAng - 0.88, contactAng + 0.88);
             ctx.stroke();
             ctx.strokeStyle = '#FEF9C3';
-            ctx.lineWidth = 2 * flashFrac;
+            ctx.lineWidth = 1.1 * flashFrac;
             ctx.beginPath();
-            ctx.arc(0, 0, 18 + (1 - flashFrac) * 12, contactAng - 0.72, contactAng + 0.72);
+            ctx.arc(0, 0, 15 + (1 - flashFrac) * 10, contactAng - 0.68, contactAng + 0.68);
             ctx.stroke();
             ctx.restore();
           }
 
-          // Hand-Orbit Revolver Cylinder, Charge Power Meter & Reload Threshold Circle
+          // Floating World Arena Collectibles (BOUNCE / UZZI) with Circular Expire Ring & Countdown Badge
+          for (const col of s.collectibles) {
+            const isUzi = col.kind === 'UZZI';
+            const frac = Math.max(0, Math.min(1, col.life / col.maxLife));
+            const spawnIn = Math.min(1, (col.maxLife - col.life) / 0.25);
+            const expireOut = col.life < 0.35 ? Math.max(0, col.life / 0.35) : 1;
+            const urgentPulse = col.life < 2.6 ? 1 + Math.sin(now * 0.022) * 0.1 : 1 + Math.sin(now * 0.007) * 0.04;
+            const ringColor =
+              col.life <= 1.8
+                ? '#EF4444'
+                : isUzi
+                ? col.life <= 3.5
+                  ? '#FBBF24'
+                  : '#F97316'
+                : col.life <= 3.5
+                ? '#F59E0B'
+                : '#10B981';
+            const rScale = spawnIn * (0.45 + 0.55 * expireOut) * urgentPulse;
+
+            ctx.save();
+            ctx.globalAlpha = spawnIn * expireOut;
+            ctx.translate(col.x, col.y);
+
+            // Outer ambient glow
+            const glowGrad = ctx.createRadialGradient(0, 0, col.r * 0.25, 0, 0, col.r * 2.2);
+            glowGrad.addColorStop(
+              0,
+              col.life <= 2.0
+                ? 'rgba(239, 68, 68, 0.38)'
+                : isUzi
+                ? 'rgba(249, 115, 22, 0.4)'
+                : 'rgba(16, 185, 129, 0.38)'
+            );
+            glowGrad.addColorStop(0.55, isUzi ? 'rgba(239, 68, 68, 0.18)' : 'rgba(250, 204, 21, 0.16)');
+            glowGrad.addColorStop(1, isUzi ? 'rgba(249, 115, 22, 0)' : 'rgba(16, 185, 129, 0)');
+            ctx.fillStyle = glowGrad;
+            ctx.beginPath();
+            ctx.arc(0, 0, col.r * 2.2, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.save();
+            ctx.scale(rScale, rScale);
+
+            // Translucent medallion backing
+            ctx.fillStyle = isUzi ? 'rgba(34, 18, 14, 0.92)' : 'rgba(16, 36, 26, 0.9)';
+            ctx.beginPath();
+            ctx.arc(0, 0, col.r + 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Circular expire progress track & glowing countdown arc
+            const ringR = col.r + 6;
+            const ringStart = -Math.PI / 2;
+            ctx.strokeStyle = 'rgba(255, 253, 249, 0.18)';
+            ctx.lineWidth = 3.2;
+            ctx.beginPath();
+            ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.strokeStyle = ringColor;
+            ctx.lineWidth = 3.5;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.arc(0, 0, ringR, ringStart, ringStart + Math.PI * 2 * frac);
+            ctx.stroke();
+
+            // Dot marker at arc head
+            const tipAng = ringStart + Math.PI * 2 * frac;
+            ctx.fillStyle = '#FEF9C3';
+            ctx.beginPath();
+            ctx.arc(Math.cos(tipAng) * ringR, Math.sin(tipAng) * ringR, 2.4, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (isUzi) {
+              // Iconic miniature UZI Submachine Gun Weapon Silhouette + Gold Coin Extended Magazine + Muzzle Spark
+              ctx.save();
+              ctx.rotate(-0.22 + Math.sin(col.bobPhase * 1.4) * 0.06);
+
+              // Rear folded wire stock
+              ctx.strokeStyle = '#94A3B8';
+              ctx.lineWidth = 2.1;
+              ctx.lineJoin = 'round';
+              ctx.beginPath();
+              ctx.moveTo(-13, -3);
+              ctx.lineTo(-19, -2);
+              ctx.lineTo(-19, 3);
+              ctx.lineTo(-13, 2);
+              ctx.stroke();
+
+              // Main boxy steel upper receiver + barrel shroud
+              ctx.fillStyle = '#475569';
+              ctx.strokeStyle = '#E2E8F0';
+              ctx.lineWidth = 1.25;
+              ctx.beginPath();
+              ctx.roundRect(-14, -7.5, 24, 9.5, 2);
+              ctx.fill();
+              ctx.stroke();
+
+              // Top receiver highlight & cocking knob
+              ctx.fillStyle = '#CBD5E1';
+              ctx.fillRect(-11, -6.4, 18, 2);
+              ctx.fillStyle = '#F8FAFC';
+              ctx.beginPath();
+              ctx.roundRect(-4, -10.5, 5.5, 3, 1);
+              ctx.fill();
+
+              // Front barrel extension & barrel nut
+              ctx.fillStyle = '#334155';
+              ctx.strokeStyle = '#94A3B8';
+              ctx.lineWidth = 1;
+              ctx.fillRect(10, -5, 8.5, 4.2);
+              ctx.strokeRect(10, -5, 8.5, 4.2);
+
+              // Central T-handle pistol grip
+              ctx.fillStyle = '#1E293B';
+              ctx.strokeStyle = '#64748B';
+              ctx.beginPath();
+              ctx.moveTo(-4, 2);
+              ctx.lineTo(3, 2);
+              ctx.lineTo(1, 11.5);
+              ctx.lineTo(-5.5, 11.5);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+
+              // Long extended golden coin magazine protruding out of the grip!
+              ctx.fillStyle = '#F59E0B';
+              ctx.strokeStyle = '#FEF08A';
+              ctx.lineWidth = 1.1;
+              ctx.beginPath();
+              ctx.moveTo(-4.2, 11.5);
+              ctx.lineTo(0.8, 11.5);
+              ctx.lineTo(-0.5, 20.5);
+              ctx.lineTo(-5.5, 20.5);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+
+              // Pulsing orange-gold muzzle flash star at barrel tip
+              const flashScale = 0.78 + 0.35 * Math.abs(Math.sin(now * 0.02));
+              ctx.save();
+              ctx.translate(20.5, -2.9);
+              ctx.scale(flashScale, flashScale);
+              ctx.fillStyle = '#F97316';
+              ctx.beginPath();
+              ctx.moveTo(6, 0);
+              ctx.lineTo(1.5, -2.2);
+              ctx.lineTo(2.5, -6);
+              ctx.lineTo(-0.5, -2);
+              ctx.lineTo(-3.5, -4);
+              ctx.lineTo(-1.5, 0);
+              ctx.lineTo(-3.5, 4);
+              ctx.lineTo(-0.5, 2);
+              ctx.lineTo(2.5, 6);
+              ctx.lineTo(1.5, 2.2);
+              ctx.closePath();
+              ctx.fill();
+              ctx.fillStyle = '#FEF9C3';
+              ctx.beginPath();
+              ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+
+              ctx.restore();
+            } else {
+              // Inner elastic spring coil underneath bouncing gold coin
+              const squashY = 0.85 + Math.sin(col.bobPhase * 2) * 0.15;
+              ctx.strokeStyle = '#34D399';
+              ctx.lineWidth = 2.1;
+              ctx.lineCap = 'round';
+              ctx.lineJoin = 'round';
+              ctx.beginPath();
+              ctx.moveTo(-10, 14);
+              ctx.lineTo(10, 11 * squashY);
+              ctx.lineTo(-9, 8 * squashY);
+              ctx.lineTo(8, 5 * squashY);
+              ctx.stroke();
+
+              // Gleaming gold mini-coin hovering atop coil + upward bounce chevron
+              const coinY = -5 - Math.abs(Math.sin(col.bobPhase)) * 5;
+              const flipW = Math.max(0.28, Math.abs(Math.cos(col.spin)));
+              ctx.save();
+              ctx.translate(0, coinY);
+              ctx.scale(flipW, 1);
+              if (cImg && cImg.complete && cImg.naturalWidth > 0) {
+                const sz = 24;
+                ctx.drawImage(cImg, -sz / 2, -sz / 2, sz, sz);
+              } else {
+                ctx.fillStyle = '#FBBF24';
+                ctx.strokeStyle = '#78350F';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(0, 0, 10, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+              }
+              ctx.restore();
+
+              // Crisp upward bounce arrow glyph
+              ctx.strokeStyle = '#FEF08A';
+              ctx.lineWidth = 2.2;
+              ctx.beginPath();
+              ctx.moveTo(-6, -15);
+              ctx.lineTo(0, -21);
+              ctx.lineTo(6, -15);
+              ctx.stroke();
+            }
+            ctx.restore();
+
+            // Crisp Expire Countdown Badge under collectible
+            const labelText = isUzi ? `UZZI · ${col.life.toFixed(1)}s` : `BOUNCE · ${col.life.toFixed(1)}s`;
+            ctx.font = '700 10.5px "JetBrains Mono", monospace';
+            const padW = ctx.measureText(labelText).width + 14;
+            const pillY = col.r + 16;
+            ctx.fillStyle = 'rgba(28, 19, 10, 0.88)';
+            ctx.strokeStyle = ringColor;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.roundRect(-padW * 0.5, pillY - 9, padW, 18, 9);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = col.life <= 1.8 ? '#FCA5A5' : isUzi ? '#FFEDD5' : '#ECFDF5';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(labelText, 0, pillY);
+
+            ctx.restore();
+          }
+
+          // Sleek Precision Hand-Orbit Revolver Cylinder, Charge Power Meter & Reload Threshold Circle
           if (s.phase === 'PLAYING' || s.phase === 'TITLE_MENU') {
             ctx.save();
-            ctx.translate(s.cx + s.handOffsetX, s.cy + s.handHopY + s.handOffsetY);
+            ctx.translate(s.cx + s.handOffsetX, s.cy + s.handHopY + s.handHoverY + s.handOffsetY);
 
             if (s.handShieldFlash > 0.02) {
               const hf = Math.min(1, s.handShieldFlash / 0.28);
               const inwardAng = Math.atan2(-s.handContactNy, -s.handContactNx);
               ctx.save();
-              ctx.globalAlpha = hf * 0.88;
+              ctx.globalAlpha = hf * 0.85;
               ctx.strokeStyle = s.ballMorph > 0.35 ? '#38BDF8' : '#F59E0B';
-              ctx.lineWidth = 4;
+              ctx.lineWidth = 1.9;
               ctx.lineCap = 'round';
               ctx.beginPath();
-              ctx.arc(0, 0, 32, inwardAng - 0.85, inwardAng + 0.85);
+              ctx.arc(0, 0, 28, inwardAng - 0.8, inwardAng + 0.8);
               ctx.stroke();
               ctx.restore();
             }
 
-            const thresholdR = 62;
-            const orbitChamberR = 46;
+            const thresholdR = 54;
+            const orbitChamberR = 41;
             const topAng = -Math.PI / 2;
             const reloadFrac = s.isReloading ? Math.min(1, s.reloadTimer / s.reloadDuration) : 1;
             const chamberRatio = s.revolverChambers / s.revolverMax;
 
-            // Outer Charge Power Meter / Extended Glide Ring
+            // Outer Charge Power Meter / Extended Glide Ring (razor-sleek chronograph style)
             if (s.handCharge > 0.02 || s.handGlideTimer > 0) {
-              const meterR = 74;
+              const meterR = 64;
               const isCharging = s.handCharge > 0.02;
               const meterFrac = isCharging ? s.handCharge : Math.min(1, s.handGlideTimer / 0.55);
               const meterColor = isCharging
@@ -6773,91 +9611,115 @@ export function PiggyDuelPlugin({
                 : '#38BDF8';
 
               ctx.strokeStyle = 'rgba(35, 26, 16, 0.14)';
-              ctx.lineWidth = 4;
+              ctx.lineWidth = 1.4;
               ctx.beginPath();
               ctx.arc(0, 0, meterR, 0, Math.PI * 2);
               ctx.stroke();
 
+              ctx.save();
+              ctx.globalAlpha = 0.22;
               ctx.strokeStyle = meterColor;
-              ctx.lineWidth = 5.5;
+              ctx.lineWidth = 4.5;
+              ctx.lineCap = 'round';
+              ctx.beginPath();
+              ctx.arc(0, 0, meterR, topAng, topAng + Math.PI * 2 * meterFrac);
+              ctx.stroke();
+              ctx.restore();
+
+              ctx.strokeStyle = meterColor;
+              ctx.lineWidth = 2.2;
               ctx.lineCap = 'round';
               ctx.beginPath();
               ctx.arc(0, 0, meterR, topAng, topAng + Math.PI * 2 * meterFrac);
               ctx.stroke();
 
+              const mTipAng = topAng + Math.PI * 2 * meterFrac;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.beginPath();
+              ctx.arc(Math.cos(mTipAng) * meterR, Math.sin(mTipAng) * meterR, 1.8, 0, Math.PI * 2);
+              ctx.fill();
+
               ctx.fillStyle = meterColor;
-              ctx.font = '800 11px "JetBrains Mono", monospace';
+              ctx.font = '700 10px "JetBrains Mono", monospace';
               ctx.textAlign = 'center';
               ctx.textBaseline = 'bottom';
               ctx.fillText(
                 isCharging
                   ? s.handCharge >= 0.96
-                    ? 'MAX POWER'
-                    : `CHARGE ${Math.round(s.handCharge * 100)}%`
+                    ? 'MAX'
+                    : `${Math.round(s.handCharge * 100)}%`
                   : 'GLIDE',
                 0,
-                -meterR - 8
+                -meterR - 6
               );
             }
 
-            // 1. Subtle backing ring around the hand's orbit
+            // 1. Hairline backing ring + subtle precision chronograph ticks
             ctx.strokeStyle =
               s.dryClickFlash > 0
-                ? 'rgba(220, 38, 38, 0.58)'
+                ? 'rgba(220, 38, 38, 0.52)'
                 : s.reloadCompleteFlash > 0
-                ? 'rgba(34, 197, 94, 0.65)'
-                : 'rgba(35, 26, 16, 0.18)';
-            ctx.lineWidth = 4.5;
+                ? 'rgba(34, 197, 94, 0.62)'
+                : 'rgba(35, 26, 16, 0.16)';
+            ctx.lineWidth = 1.4;
             ctx.beginPath();
             ctx.arc(0, 0, thresholdR, 0, Math.PI * 2);
             ctx.stroke();
 
+            ctx.strokeStyle = 'rgba(120, 53, 15, 0.18)';
+            ctx.lineWidth = 0.75;
+            for (let ti = 0; ti < 12; ti++) {
+              const ta = topAng + (ti * Math.PI * 2) / 12;
+              const innerR = ti % 3 === 0 ? thresholdR - 3.5 : thresholdR - 2;
+              ctx.beginPath();
+              ctx.moveTo(Math.cos(ta) * innerR, Math.sin(ta) * innerR);
+              ctx.lineTo(Math.cos(ta) * (thresholdR + 1.5), Math.sin(ta) * (thresholdR + 1.5));
+              ctx.stroke();
+            }
+
             // 2. Threshold Progress Arc (ammo remaining OR sweeping reload gate arc)
             if (s.isReloading) {
-              // Dashed base track for remaining sweep to threshold
               ctx.save();
-              ctx.setLineDash([4, 5]);
+              ctx.setLineDash([3, 4]);
               ctx.strokeStyle = 'rgba(180, 83, 9, 0.28)';
-              ctx.lineWidth = 2.5;
+              ctx.lineWidth = 1.1;
               ctx.beginPath();
               ctx.arc(0, 0, thresholdR, 0, Math.PI * 2);
               ctx.stroke();
               ctx.restore();
 
-              // Active sweeping reload progress toward the 12-o'clock threshold
               ctx.strokeStyle = reloadFrac > 0.78 ? '#22C55E' : '#F59E0B';
-              ctx.lineWidth = 5.5;
+              ctx.lineWidth = 2.3;
               ctx.lineCap = 'round';
               ctx.beginPath();
               ctx.arc(0, 0, thresholdR, topAng, topAng + Math.PI * 2 * reloadFrac);
               ctx.stroke();
 
-              // Glowing orbiting bead at the reload sweep tip
               const tipAng = topAng + Math.PI * 2 * reloadFrac;
               const tipX = Math.cos(tipAng) * thresholdR;
               const tipY = Math.sin(tipAng) * thresholdR;
-              ctx.fillStyle = reloadFrac > 0.78 ? '#4ADE80' : '#FDE047';
+              ctx.fillStyle = reloadFrac > 0.78 ? '#4ADE80' : '#FEF08A';
               ctx.beginPath();
-              ctx.arc(tipX, tipY, 5.5, 0, Math.PI * 2);
+              ctx.arc(tipX, tipY, 3.2, 0, Math.PI * 2);
               ctx.fill();
               ctx.strokeStyle = '#78350F';
-              ctx.lineWidth = 1.5;
+              ctx.lineWidth = 1.0;
               ctx.stroke();
             } else if (s.revolverChambers > 0) {
               ctx.strokeStyle =
                 s.reloadCompleteFlash > 0
                   ? '#22C55E'
                   : s.revolverChambers <= 2
-                  ? 'rgba(234, 88, 12, 0.85)'
-                  : 'rgba(217, 119, 6, 0.78)';
-              ctx.lineWidth = 4;
+                  ? 'rgba(234, 88, 12, 0.82)'
+                  : 'rgba(217, 119, 6, 0.72)';
+              ctx.lineWidth = 2.0;
               ctx.lineCap = 'round';
               ctx.beginPath();
               ctx.arc(0, 0, thresholdR, topAng, topAng + Math.PI * 2 * chamberRatio);
               ctx.stroke();
             }
 
-            // 3. Threshold Gate Marker at 12 o'clock (where reload locks & chambers reset)
+            // 3. Sleek Threshold Gate Marker at 12 o'clock
             const gateColor = s.isReloading
               ? reloadFrac > 0.85
                 ? '#22C55E'
@@ -6867,22 +9729,22 @@ export function PiggyDuelPlugin({
               : '#78350F';
             ctx.fillStyle = gateColor;
             ctx.beginPath();
-            ctx.moveTo(0, -thresholdR - 8);
-            ctx.lineTo(-5.5, -thresholdR - 15);
-            ctx.lineTo(5.5, -thresholdR - 15);
+            ctx.moveTo(0, -thresholdR - 5);
+            ctx.lineTo(-3.5, -thresholdR - 10);
+            ctx.lineTo(3.5, -thresholdR - 10);
             ctx.closePath();
             ctx.fill();
 
             ctx.strokeStyle = '#FFFDF9';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = 1.25;
             ctx.beginPath();
-            ctx.moveTo(0, -thresholdR - 6);
-            ctx.lineTo(0, -thresholdR + 6);
+            ctx.moveTo(0, -thresholdR - 3.5);
+            ctx.lineTo(0, -thresholdR + 3.5);
             ctx.stroke();
 
             // 4. Inner Rotating 6-Chamber Revolver Cylinder Orbit
-            ctx.strokeStyle = 'rgba(120, 53, 15, 0.16)';
-            ctx.lineWidth = 1.25;
+            ctx.strokeStyle = 'rgba(120, 53, 15, 0.14)';
+            ctx.lineWidth = 0.85;
             ctx.beginPath();
             ctx.arc(0, 0, orbitChamberR, 0, Math.PI * 2);
             ctx.stroke();
@@ -6897,26 +9759,24 @@ export function PiggyDuelPlugin({
               ctx.save();
               ctx.translate(px, py);
               if (isLoaded) {
-                // Loaded brass coin chamber
                 ctx.fillStyle = s.reloadCompleteFlash > 0 ? '#4ADE80' : '#FBBF24';
                 ctx.strokeStyle = '#78350F';
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 1.25;
                 ctx.beginPath();
-                ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+                ctx.arc(0, 0, 4.3, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
 
                 ctx.fillStyle = '#FEF9C3';
                 ctx.beginPath();
-                ctx.arc(-1.8, -1.8, 1.9, 0, Math.PI * 2);
+                ctx.arc(-1.2, -1.2, 1.3, 0, Math.PI * 2);
                 ctx.fill();
               } else {
-                // Spent hollow revolver bore
-                ctx.fillStyle = 'rgba(35, 26, 16, 0.14)';
-                ctx.strokeStyle = s.dryClickFlash > 0 ? 'rgba(220, 38, 38, 0.6)' : 'rgba(120, 53, 15, 0.38)';
-                ctx.lineWidth = 1.5;
+                ctx.fillStyle = 'rgba(35, 26, 16, 0.1)';
+                ctx.strokeStyle = s.dryClickFlash > 0 ? 'rgba(220, 38, 38, 0.55)' : 'rgba(120, 53, 15, 0.3)';
+                ctx.lineWidth = 1.05;
                 ctx.beginPath();
-                ctx.arc(0, 0, 5.4, 0, Math.PI * 2);
+                ctx.arc(0, 0, 3.7, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
               }
@@ -6926,22 +9786,226 @@ export function PiggyDuelPlugin({
             // 5. Crisp Reloading / Low-Ammo Orbit Cue
             if (s.isReloading) {
               ctx.fillStyle = '#92400E';
-              ctx.font = '800 11px "JetBrains Mono", monospace';
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'top';
-              ctx.fillText(`RELOAD ${Math.round(reloadFrac * 100)}%`, 0, thresholdR + 9);
-            } else if (s.revolverChambers <= 2 && s.phase === 'PLAYING') {
-              ctx.fillStyle = '#B45309';
               ctx.font = '700 10px "JetBrains Mono", monospace';
               ctx.textAlign = 'center';
               ctx.textBaseline = 'top';
-              ctx.fillText(`${s.revolverChambers}/6 · [R]`, 0, thresholdR + 9);
+              ctx.fillText(`RELOAD ${Math.round(reloadFrac * 100)}%`, 0, thresholdR + 7);
+            } else if (s.revolverChambers <= 2 && s.phase === 'PLAYING') {
+              ctx.fillStyle = '#B45309';
+              ctx.font = '700 9.5px "JetBrains Mono", monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillText(`${s.revolverChambers}/6 · [R]`, 0, thresholdR + 7);
+            }
+
+            // Active Bounce-Coins & UZZI Buff Orbit Rings around the Cursor Reticle
+            const baseBuffOffset = s.isReloading || s.revolverChambers <= 2 ? 20 : 8;
+            let nextBuffTextY = thresholdR + baseBuffOffset;
+            if (s.bounceBuffTimer > 0 && s.phase === 'PLAYING') {
+              const bFrac = Math.max(0, Math.min(1, s.bounceBuffTimer / s.bounceBuffMax));
+              const buffR = 59.5;
+              const bColor = s.bounceBuffTimer <= 2.5 ? '#F59E0B' : '#10B981';
+              ctx.save();
+              ctx.strokeStyle = bColor;
+              ctx.globalAlpha = s.bounceBuffTimer <= 2.2 ? 0.55 + 0.35 * Math.sin(now * 0.022) : 0.85;
+              ctx.lineWidth = 2.0;
+              ctx.setLineDash([4, 3]);
+              ctx.beginPath();
+              ctx.arc(0, 0, buffR, topAng, topAng + Math.PI * 2 * bFrac);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = bColor;
+              ctx.font = '700 9.5px "JetBrains Mono", monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillText(`BOUNCE ${s.bounceBuffTimer.toFixed(1)}s`, 0, nextBuffTextY);
+              ctx.restore();
+              nextBuffTextY += 12;
+            }
+            if (s.uzziBuffTimer > 0 && s.phase === 'PLAYING') {
+              const uFrac = Math.max(0, Math.min(1, s.uzziBuffTimer / s.uzziBuffMax));
+              const uBuffR = s.bounceBuffTimer > 0 ? 64.5 : 59.5;
+              const uColor = s.uzziBuffTimer <= 2.5 ? '#EF4444' : '#F97316';
+              ctx.save();
+              ctx.strokeStyle = uColor;
+              ctx.globalAlpha = s.uzziBuffTimer <= 2.2 ? 0.55 + 0.35 * Math.sin(now * 0.024) : 0.88;
+              ctx.lineWidth = 2.1;
+              ctx.setLineDash([6, 3]);
+              ctx.beginPath();
+              ctx.arc(0, 0, uBuffR, topAng, topAng + Math.PI * 2 * uFrac);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = uColor;
+              ctx.font = '700 9.5px "JetBrains Mono", monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillText(`UZZI ${s.uzziBuffTimer.toFixed(1)}s`, 0, nextBuffTextY);
+              ctx.restore();
             }
 
             ctx.restore();
           }
 
-          // Subtle Cinematic Letterbox Framing during Piggy Disassembly Finisher
+          ctx.restore();
+
+          // Screen-Space Combo Damage & Impact Layer (un-shaken viewport coordinates)
+          const hitFrac =
+            s.screenHitTimer > 0 && s.screenHitMax > 0
+              ? Math.max(0, Math.min(1, s.screenHitTimer / s.screenHitMax))
+              : 0;
+          const hitEase = hitFrac * hitFrac;
+          const activeIntensity = s.screenHitIntensity * hitEase;
+          const auraPulse = s.screenComboAura * (0.65 + 0.35 * Math.sin(now * 0.0085));
+
+          if (activeIntensity > 0.015 || s.screenComboAura > 0.04) {
+            const cTier = Math.max(s.combo, hitFrac > 0.05 ? s.screenHitCombo : 0);
+            const comboNorm = Math.min(1, 1 - Math.exp(-Math.max(0, cTier) * 0.24));
+            const focusX = hitFrac > 0.05 ? s.screenHitX : s.px;
+            const focusY = hitFrac > 0.05 ? s.screenHitY : piggyCenterY;
+
+            // Palette evolves with combo intensity: Brass Gold -> Emerald/Amber -> Molten Crimson-Gold
+            const vigOuterColor =
+              cTier >= 6 || s.screenHitIsBreak
+                ? '220, 38, 38'
+                : cTier >= 3 && s.screenHitIsDirect
+                ? '22, 163, 74'
+                : '217, 119, 6';
+            const vigMidColor =
+              cTier >= 5 || s.screenHitIsBreak
+                ? '249, 115, 22'
+                : s.screenHitIsDirect
+                ? '250, 204, 21'
+                : '245, 158, 11';
+
+            ctx.save();
+
+            // 1. Peripheral Combo & Damage Vignette (pulses sharply on coin hit, breathes at combo >= 2)
+            const vigAlpha = Math.min(0.56, activeIntensity * 0.4 + auraPulse * 0.16);
+            if (vigAlpha > 0.01) {
+              const outerR = Math.hypot(WORLD_W * 0.52, WORLD_H * 0.54);
+              const innerR = outerR * Math.max(0.28, 0.54 - activeIntensity * 0.14 - comboNorm * 0.08);
+              const vigGrad = ctx.createRadialGradient(
+                WORLD_W * 0.5,
+                WORLD_H * 0.5,
+                innerR,
+                WORLD_W * 0.5,
+                WORLD_H * 0.5,
+                outerR
+              );
+              vigGrad.addColorStop(0, `rgba(${vigMidColor}, 0)`);
+              vigGrad.addColorStop(0.62, `rgba(${vigMidColor}, ${(vigAlpha * 0.34).toFixed(3)})`);
+              vigGrad.addColorStop(1, `rgba(${vigOuterColor}, ${vigAlpha.toFixed(3)})`);
+              ctx.fillStyle = vigGrad;
+              ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+            }
+
+            // 2. Crisp Exposure Flash & Directional Impact Bloom at Hit Coordinates
+            if (activeIntensity > 0.02) {
+              const flashAlpha = Math.min(0.24, activeIntensity * (s.screenHitIsBreak ? 0.22 : s.screenHitIsDirect ? 0.14 : 0.06));
+              ctx.fillStyle = s.screenHitIsBreak
+                ? `rgba(255, 247, 214, ${flashAlpha.toFixed(3)})`
+                : s.screenHitIsDirect
+                ? `rgba(254, 249, 195, ${flashAlpha.toFixed(3)})`
+                : `rgba(253, 230, 138, ${flashAlpha.toFixed(3)})`;
+              ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+
+              // Localized prism bloom & expanding screen-space shockwave halo
+              const shockProgress = 1 - hitFrac;
+              const shockR = 36 + shockProgress * (240 + comboNorm * 280 + (s.screenHitIsBreak ? 220 : 0));
+              if (s.screenHitIsDirect || comboNorm >= 0.35) {
+                const prismOffset = (1.5 + comboNorm * 4.5) * hitFrac;
+                ctx.lineCap = 'round';
+                ctx.globalAlpha = Math.min(0.75, activeIntensity * 0.65);
+                ctx.strokeStyle = cTier >= 6 || s.screenHitIsBreak ? '#EF4444' : '#22C55E';
+                ctx.lineWidth = 1.4 + comboNorm * 2.2;
+                ctx.beginPath();
+                ctx.arc(focusX - prismOffset, focusY, shockR, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.strokeStyle = '#FACC15';
+                ctx.lineWidth = 1.2 + comboNorm * 1.8;
+                ctx.beginPath();
+                ctx.arc(focusX + prismOffset, focusY, shockR * 0.985, 0, Math.PI * 2);
+                ctx.stroke();
+              }
+
+              // Anamorphic horizontal lens glint on direct slot hit or high combo
+              if (s.screenHitIsDirect && (cTier >= 2 || s.screenHitIsBreak)) {
+                const flareHalfW = (110 + comboNorm * 260 + (s.screenHitIsBreak ? 160 : 0)) * (0.45 + 0.55 * hitFrac);
+                const flareGrad = ctx.createLinearGradient(focusX - flareHalfW, focusY, focusX + flareHalfW, focusY);
+                flareGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+                flareGrad.addColorStop(0.35, `rgba(${vigMidColor}, ${(activeIntensity * 0.28).toFixed(3)})`);
+                flareGrad.addColorStop(0.5, `rgba(255, 255, 255, ${(activeIntensity * 0.62).toFixed(3)})`);
+                flareGrad.addColorStop(0.65, `rgba(${vigMidColor}, ${(activeIntensity * 0.28).toFixed(3)})`);
+                flareGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = flareGrad;
+                ctx.fillRect(focusX - flareHalfW, focusY - (1.8 + comboNorm * 2.2), flareHalfW * 2, 3.6 + comboNorm * 4.4);
+              }
+
+              // 3. Radial Impact Speed Lines radiating inward from viewport edges toward the hit
+              const lineCount = Math.round(8 + comboNorm * 22 + (s.screenHitIsBreak ? 10 : 0));
+              const lineAlpha = Math.min(0.68, activeIntensity * (0.28 + comboNorm * 0.42));
+              if (lineAlpha > 0.03) {
+                ctx.lineCap = 'round';
+                const maxEdgeR = Math.hypot(WORLD_W * 0.62, WORLD_H * 0.65);
+                for (let li = 0; li < lineCount; li++) {
+                  const seedA = (li / lineCount) * Math.PI * 2 + Math.sin(li * 12.9898 + cTier) * 0.14;
+                  const outerDist = maxEdgeR * (0.72 + ((li * 37) % 19) * 0.015);
+                  const streakLen = (48 + comboNorm * 115 + ((li * 53) % 38)) * (0.45 + 0.55 * hitFrac);
+                  const x1 = focusX + Math.cos(seedA) * outerDist;
+                  const y1 = focusY + Math.sin(seedA) * outerDist;
+                  const x2 = focusX + Math.cos(seedA) * Math.max(95, outerDist - streakLen);
+                  const y2 = focusY + Math.sin(seedA) * Math.max(95, outerDist - streakLen);
+
+                  ctx.globalAlpha = lineAlpha * (li % 3 === 0 ? 1 : 0.62);
+                  ctx.strokeStyle =
+                    li % 4 === 0
+                      ? '#FFFBEB'
+                      : cTier >= 6 || s.screenHitIsBreak
+                      ? '#F97316'
+                      : '#F59E0B';
+                  ctx.lineWidth = (li % 3 === 0 ? 2.1 : 1.15) + comboNorm * 1.1;
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y1);
+                  ctx.lineTo(x2, y2);
+                  ctx.stroke();
+                }
+              }
+            }
+
+            // 4. Steampunk Corner Overpressure Brackets (scale cleanly with combo streak)
+            if (s.screenComboAura > 0.12 || (activeIntensity > 0.15 && cTier >= 2)) {
+              const cornerAlpha = Math.min(0.72, s.screenComboAura * 0.45 + activeIntensity * 0.35);
+              const armLen = 18 + comboNorm * 22 + hitFrac * 8;
+              const inset = 10 - hitFrac * 3;
+              ctx.globalAlpha = cornerAlpha;
+              ctx.strokeStyle = cTier >= 6 ? '#EA580C' : cTier >= 3 ? '#D97706' : '#F59E0B';
+              ctx.lineWidth = 1.6 + comboNorm * 1.4;
+              ctx.beginPath();
+              // Top-left
+              ctx.moveTo(inset, inset + armLen);
+              ctx.lineTo(inset, inset);
+              ctx.lineTo(inset + armLen, inset);
+              // Top-right
+              ctx.moveTo(WORLD_W - inset - armLen, inset);
+              ctx.lineTo(WORLD_W - inset, inset);
+              ctx.lineTo(WORLD_W - inset, inset + armLen);
+              // Bottom-left
+              ctx.moveTo(inset, WORLD_H - inset - armLen);
+              ctx.lineTo(inset, WORLD_H - inset);
+              ctx.lineTo(inset + armLen, WORLD_H - inset);
+              // Bottom-right
+              ctx.moveTo(WORLD_W - inset - armLen, WORLD_H - inset);
+              ctx.lineTo(WORLD_W - inset, WORLD_H - inset);
+              ctx.lineTo(WORLD_W - inset, WORLD_H - inset - armLen);
+              ctx.stroke();
+            }
+
+            ctx.restore();
+          }
+
+          // Subtle Cinematic Letterbox Framing during Piggy Disassembly Finisher OR Dollar Barrage Lockdown
           if (s.bossAction === 'BREAKING') {
             const breakElapsed = Math.max(0, s.breakMax - s.breakTimer);
             const barIn = Math.min(1, breakElapsed / 0.22);
@@ -6955,11 +10019,71 @@ export function PiggyDuelPlugin({
               ctx.fillStyle = 'rgba(245, 158, 11, 0.65)';
               ctx.fillRect(0, barH - 2, WORLD_W, 2);
               ctx.fillRect(0, WORLD_H - barH, WORLD_W, 2);
+
+              if (barIn > 0.65 && barOut > 0.35) {
+                ctx.globalAlpha = Math.min(1, barIn * barOut);
+                ctx.fillStyle = '#FEF3C7';
+                ctx.font = '700 11px "JetBrains Mono", monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const breakCaption =
+                  breakElapsed < 0.36
+                    ? 'OVERPRESSURE CRITICAL · COINS SURGING FROM CHEST SLOT!'
+                    : breakElapsed < 1.15
+                    ? 'PIGGY SHATTERED · THROWN COINS ERUPTING!'
+                    : 'JACKPOT RAIN · TREASURE VAULT EMPTIED!';
+                ctx.fillText(breakCaption, WORLD_W * 0.5, barH * 0.5);
+              }
               ctx.restore();
             }
-          }
+          } else if (s.introCinematic > 0.02) {
+            const barH = 26 * s.introCinematic;
+            ctx.save();
+            ctx.fillStyle = `rgba(32, 22, 12, ${(0.82 * s.introCinematic).toFixed(3)})`;
+            ctx.fillRect(0, 0, WORLD_W, barH);
+            ctx.fillRect(0, WORLD_H - barH, WORLD_W, barH);
+            ctx.fillStyle = `rgba(245, 158, 11, ${(0.68 * s.introCinematic).toFixed(3)})`;
+            ctx.fillRect(0, barH - 1.5, WORLD_W, 1.5);
+            ctx.fillRect(0, WORLD_H - barH, WORLD_W, 1.5);
 
-          ctx.restore();
+            if (s.introCinematic > 0.35) {
+              ctx.globalAlpha = Math.min(1, (s.introCinematic - 0.35) / 0.35);
+              ctx.fillStyle = '#FEF3C7';
+              ctx.font = '700 10.5px "JetBrains Mono", monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              const introCaption =
+                s.introStage === 0
+                  ? 'JUST A TINY TABLETOP PIGGYBANK...?'
+                  : s.introStage === 1
+                  ? 'MASS SURGE DETECTED · CHASSIS EXPANDING!'
+                  : s.introStage === 2
+                  ? 'ONE-DOLLAR HERO EMERGES · $1 CAPE UNFURLED!'
+                  : 'HERO LANDED · DROP 3 COINS IN THE SLOT!';
+              ctx.fillText(introCaption, WORLD_W * 0.5, barH * 0.5);
+            }
+            ctx.restore();
+          } else if (s.dollarCinematic > 0.02) {
+            const barH = 22 * s.dollarCinematic;
+            ctx.save();
+            ctx.fillStyle = `rgba(14, 24, 18, ${(0.76 * s.dollarCinematic).toFixed(3)})`;
+            ctx.fillRect(0, 0, WORLD_W, barH);
+            ctx.fillRect(0, WORLD_H - barH, WORLD_W, barH);
+            ctx.fillStyle = `rgba(74, 222, 128, ${(0.55 * s.dollarCinematic).toFixed(3)})`;
+            ctx.fillRect(0, barH - 1.5, WORLD_W, 1.5);
+            ctx.fillRect(0, WORLD_H - barH, WORLD_W, 1.5);
+
+            // Sleek cinematic banner badge inside top letterbox bar
+            if (s.dollarCinematic > 0.45) {
+              ctx.globalAlpha = Math.min(1, (s.dollarCinematic - 0.45) / 0.35);
+              ctx.fillStyle = '#DCFCE7';
+              ctx.font = '700 10.5px "JetBrains Mono", monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('VAULT LOCKDOWN · SWAT FLYING BILLS · SLOT SEALED', WORLD_W * 0.5, barH * 0.5);
+            }
+            ctx.restore();
+          }
         }
       }
 
@@ -6979,6 +10103,10 @@ export function PiggyDuelPlugin({
         const baseActionLabel =
           s.bossAction === 'BREAKING'
             ? 'DISASSEMBLING!'
+            : s.bossAction === 'INTRO_TRANSFORM'
+            ? 'AWAKENING · PIGGY REVEAL!'
+            : s.bossAction === 'DOLLAR_BARRAGE'
+            ? `${pat.name} · Cash Barrage (Slot Sealed!)`
             : s.bossAction === 'BOUNCY_BALL'
             ? isNervous
               ? `${pat.name} · Panic Bounce!`
@@ -7039,6 +10167,16 @@ export function PiggyDuelPlugin({
           isNervous,
           handChargePct,
           handStateLabel,
+          bounceBuffSec: s.bounceBuffTimer > 0 ? Number(s.bounceBuffTimer.toFixed(1)) : 0,
+          bounceBuffPct:
+            s.bounceBuffTimer > 0 && s.bounceBuffMax > 0
+              ? Math.round(Math.min(1, s.bounceBuffTimer / s.bounceBuffMax) * 100)
+              : 0,
+          uzziBuffSec: s.uzziBuffTimer > 0 ? Number(s.uzziBuffTimer.toFixed(1)) : 0,
+          uzziBuffPct:
+            s.uzziBuffTimer > 0 && s.uzziBuffMax > 0
+              ? Math.round(Math.min(1, s.uzziBuffTimer / s.uzziBuffMax) * 100)
+              : 0,
         }));
       }
 
@@ -7060,7 +10198,7 @@ export function PiggyDuelPlugin({
     }
   };
 
-  const spriteH = Math.max(60, Math.round(stageDims.h * 0.14));
+  const spriteH = Math.max(54, Math.round(stageDims.h * 0.132));
   const spriteW = Math.round(spriteH * spriteCellRatio);
 
   return (
@@ -7170,6 +10308,50 @@ export function PiggyDuelPlugin({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {hud.uzziBuffSec > 0 && (
+            <div
+              title="UZZI active: faster release and dumps all current chamber coins in one release"
+              className={`hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-lg border text-xs font-semibold shrink-0 transition-colors ${
+                hud.uzziBuffSec <= 2.5
+                  ? 'bg-[#FEE2E2] text-[#B91C1C] border-[#EF4444]/50'
+                  : 'bg-[#FFF7ED] text-[#C2410C] border-[#F97316]/45'
+              }`}
+            >
+              <span className="inline-block w-2 h-2 rounded-full bg-[#F97316] animate-pulse" />
+              <span className="whitespace-nowrap">UZZI</span>
+              <span className="font-mono-tabular font-bold">{hud.uzziBuffSec.toFixed(1)}s</span>
+              <div className="w-10 h-1.5 rounded-full bg-[#231A10]/12 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-75 ${
+                    hud.uzziBuffSec <= 2.5 ? 'bg-[#EF4444]' : 'bg-[#F97316]'
+                  }`}
+                  style={{ width: `${hud.uzziBuffPct}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {hud.bounceBuffSec > 0 && (
+            <div
+              title="Spawning coins bounce higher and last longer until timer expires"
+              className={`hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-lg border text-xs font-semibold shrink-0 transition-colors ${
+                hud.bounceBuffSec <= 2.5
+                  ? 'bg-[#FEF3C7] text-[#B45309] border-[#F59E0B]/50'
+                  : 'bg-[#ECFDF5] text-[#047857] border-[#10B981]/45'
+              }`}
+            >
+              <span className="inline-block w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
+              <span className="whitespace-nowrap">Bounce Coins</span>
+              <span className="font-mono-tabular font-bold">{hud.bounceBuffSec.toFixed(1)}s</span>
+              <div className="w-10 h-1.5 rounded-full bg-[#231A10]/12 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-75 ${
+                    hud.bounceBuffSec <= 2.5 ? 'bg-[#F59E0B]' : 'bg-[#10B981]'
+                  }`}
+                  style={{ width: `${hud.bounceBuffPct}%` }}
+                />
+              </div>
+            </div>
+          )}
           <button
             type="button"
             onClick={cycleLaserMode}
@@ -7642,6 +10824,70 @@ export function PiggyDuelPlugin({
               <filter id="gl-blur-s" x="-50%" y="-50%" width="200%" height="200%">
                 <feGaussianBlur stdDeviation="1.1" />
               </filter>
+              <linearGradient id="cape-dollar-lining" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#264729" />
+                <stop offset="0.55" stopColor="#1b361e" />
+                <stop offset="1" stopColor="#0f2112" />
+              </linearGradient>
+              <linearGradient id="cape-dollar-main" x1="0.06" y1="0.02" x2="0.92" y2="0.98">
+                <stop offset="0" stopColor="#f3f1e2" />
+                <stop offset="0.28" stopColor="#e3e4ca" />
+                <stop offset="0.62" stopColor="#cbd3b0" />
+                <stop offset="0.88" stopColor="#a7b892" />
+                <stop offset="1" stopColor="#849b74" />
+              </linearGradient>
+              <linearGradient id="cape-dollar-pleat" x1="0" y1="0" x2="1" y2="0.8">
+                <stop offset="0" stopColor="#132917" stopOpacity="0.34" />
+                <stop offset="0.55" stopColor="#1c3b21" stopOpacity="0.18" />
+                <stop offset="1" stopColor="#0f2212" stopOpacity="0.32" />
+              </linearGradient>
+              <linearGradient id="cape-dollar-ridge" x1="0" y1="0" x2="0.8" y2="1">
+                <stop offset="0" stopColor="#fcfbf2" stopOpacity="0.72" />
+                <stop offset="0.5" stopColor="#eef2df" stopOpacity="0.44" />
+                <stop offset="1" stopColor="#dbe3c5" stopOpacity="0.08" />
+              </linearGradient>
+              <linearGradient id="cape-gold-trim" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#fef9c3" />
+                <stop offset="0.35" stopColor="#fbbf24" />
+                <stop offset="0.7" stopColor="#b45309" />
+                <stop offset="1" stopColor="#fde68a" />
+              </linearGradient>
+              <linearGradient id="cape-emerald-seal" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#15803d" />
+                <stop offset="0.55" stopColor="#22c55e" />
+                <stop offset="1" stopColor="#14532d" />
+              </linearGradient>
+              <pattern id="cape-dollar-guilloche" width="18" height="18" patternUnits="userSpaceOnUse">
+                <path d="M 0 9 Q 4.5 4.5 9 9 T 18 9" fill="none" stroke="#1b3a21" strokeWidth="0.55" opacity="0.24" />
+                <path d="M 9 0 Q 13.5 4.5 9 9 T 9 18" fill="none" stroke="#1b3a21" strokeWidth="0.45" opacity="0.18" />
+                <circle cx="4.5" cy="13.5" r="0.55" fill="#1b3a21" opacity="0.22" />
+              </pattern>
+              <clipPath id="hero-cape-clip">
+                <path id="hero-cape-clip-path" d="M 524 222 L 820 260 L 820 790 L 524 790 Z" />
+              </clipPath>
+              {/* Glossy Ceramic-Porcelain Tabletop Piggybank Shell Gradients (contrasts sharply with the brass mech inside!) */}
+              <radialGradient id="piggy-ceramic-body" cx="0.38" cy="0.32" r="0.68">
+                <stop offset="0" stopColor="#fdece1" />
+                <stop offset="0.32" stopColor="#f5c0a4" />
+                <stop offset="0.68" stopColor="#da7f5b" />
+                <stop offset="1" stopColor="#933f25" />
+              </radialGradient>
+              <radialGradient id="piggy-ceramic-head" cx="0.35" cy="0.32" r="0.7">
+                <stop offset="0" stopColor="#fef0e6" />
+                <stop offset="0.4" stopColor="#f4bba0" />
+                <stop offset="0.78" stopColor="#cf704c" />
+                <stop offset="1" stopColor="#89381f" />
+              </radialGradient>
+              <linearGradient id="piggy-ceramic-belly" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#df8966" />
+                <stop offset="0.58" stopColor="#b95838" />
+                <stop offset="1" stopColor="#772e18" />
+              </linearGradient>
+              <linearGradient id="piggy-ceramic-foot" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#f2b294" />
+                <stop offset="0.6" stopColor="#bc5f3e" />
+                <stop offset="1" stopColor="#702c18" />
+              </linearGradient>
             </defs>
 
             <rect x="0" y={FLOOR_Y} width={WORLD_W} height={WORLD_H - FLOOR_Y} fill="#EBE3D4" />
@@ -7663,6 +10909,229 @@ export function PiggyDuelPlugin({
               <g id="actor" strokeLinejoin="round" strokeLinecap="round">
                 <g id="legs-group" />
                 <g id="body">
+                  {/* Artistic Engraved ONE DOLLAR ($1) Banknote Cape (cotton parchment, intaglio ink, seals & Piggy-Washington oval) */}
+                  <g id="hero-cape-back" opacity="0" style={{ pointerEvents: 'none' }}>
+                    {/* Green reverse face curling behind outer bill corner */}
+                    <path id="hero-cape-shadow" fill="url(#cape-dollar-lining)" stroke="#112615" strokeWidth="2.4" strokeLinejoin="round" />
+
+                    {/* Everything printed on the face of the $1 bill is sharply clipped to the dynamic paper sheet */}
+                    <g clipPath="url(#hero-cape-clip)">
+                      <path id="hero-cape-main" fill="url(#cape-dollar-main)" />
+                      <path id="hero-cape-weave" fill="url(#cape-dollar-guilloche)" />
+
+                      {/* Engraved $1 Federal Reserve Note artwork moving & skewing natively with the paper sheet */}
+                      <g id="hero-cape-emblem">
+                        {/* Fine engraved double banknote border panel */}
+                        <rect x="-152" y="-212" width="304" height="424" rx="8" fill="none" stroke="#183820" strokeWidth="5.5" />
+                        <rect x="-143" y="-203" width="286" height="406" rx="4" fill="none" stroke="#2f5a38" strokeWidth="2.0" strokeDasharray="4 2.5" />
+                        <rect x="-137" y="-197" width="274" height="394" rx="3" fill="none" stroke="#183820" strokeWidth="1.2" />
+
+                        {/* Micro Engraved Header & Mint Legend */}
+                        <text
+                          x="0"
+                          y="-173"
+                          textAnchor="middle"
+                          fontSize="11"
+                          fontWeight="800"
+                          letterSpacing="1.6"
+                          fontFamily="Fraunces, Georgia, serif"
+                          fill="#16331c"
+                        >
+                          FEDERAL RESERVE NOTE
+                        </text>
+                        <text
+                          x="0"
+                          y="-158"
+                          textAnchor="middle"
+                          fontSize="7.5"
+                          fontWeight="700"
+                          letterSpacing="1.4"
+                          fontFamily="JetBrains Mono, monospace"
+                          fill="#214a29"
+                        >
+                          THE UNITED PIGS OF BRASS
+                        </text>
+
+                        {/* Four Iconic '1' Corner Guilloche Rosettes */}
+                        {[
+                          { x: -112, y: -164 },
+                          { x: 112, y: -164 },
+                          { x: -112, y: 164 },
+                          { x: 112, y: 164 },
+                        ].map((c, idx) => (
+                          <g key={idx} transform={`translate(${c.x} ${c.y})`}>
+                            <ellipse cx="0" cy="0" rx="28" ry="30" fill="#23492b" stroke="#112615" strokeWidth="1.6" />
+                            <ellipse cx="0" cy="0" rx="23" ry="25" fill="none" stroke="#e9ead5" strokeWidth="1.2" strokeDasharray="2.2 2" />
+                            <ellipse cx="0" cy="0" rx="18" ry="20" fill="#e6e7d0" fillOpacity="0.16" />
+                            <text
+                              x="0"
+                              y="10"
+                              textAnchor="middle"
+                              fontSize="30"
+                              fontWeight="900"
+                              fontFamily="Fraunces, Georgia, serif"
+                              fill="#f5f4e4"
+                              stroke="#112615"
+                              strokeWidth="1.2"
+                            >
+                              1
+                            </text>
+                            <text
+                              x="0"
+                              y="24"
+                              textAnchor="middle"
+                              fontSize="6.5"
+                              fontWeight="800"
+                              letterSpacing="1"
+                              fontFamily="JetBrains Mono, monospace"
+                              fill="#e8ead4"
+                            >
+                              ONE
+                            </text>
+                          </g>
+                        ))}
+
+                        {/* Left Black Federal Reserve District Seal ('B') + Top-Left Serial */}
+                        <g transform="translate(-88 -54)">
+                          <circle cx="0" cy="0" r="24" fill="#17231a" stroke="#f0efe0" strokeWidth="1.1" strokeDasharray="2.8 1.6" />
+                          <circle cx="0" cy="0" r="19" fill="#e9ebd7" stroke="#16291a" strokeWidth="1.8" />
+                          <text
+                            x="0"
+                            y="9"
+                            textAnchor="middle"
+                            fontSize="24"
+                            fontWeight="900"
+                            fontFamily="Fraunces, Georgia, serif"
+                            fill="#16291a"
+                          >
+                            B
+                          </text>
+                        </g>
+                        <text
+                          x="-88"
+                          y="-94"
+                          textAnchor="middle"
+                          fontSize="9.5"
+                          fontWeight="700"
+                          letterSpacing="0.8"
+                          fontFamily="JetBrains Mono, monospace"
+                          fill="#15803d"
+                        >
+                          B 77741008 B
+                        </text>
+
+                        {/* Right Bright Green U.S. Treasury Department Seal + Bottom-Right Serial */}
+                        <g transform="translate(88 -54)">
+                          <circle cx="0" cy="0" r="24" fill="#16a34a" stroke="#11381e" strokeWidth="1.5" strokeDasharray="2.8 1.6" />
+                          <circle cx="0" cy="0" r="18" fill="#dcfce7" fillOpacity="0.85" stroke="#15803d" strokeWidth="1.5" />
+                          {/* Treasury shield & balance scales */}
+                          <path d="M -8 -3 H 8 M 0 -9 V 7 M -7 -3 L -9 4 L -5 4 Z M 7 -3 L 5 4 L 9 4 Z" fill="none" stroke="#14532d" strokeWidth="1.6" />
+                          <path d="M -9 9 L 9 9" stroke="#14532d" strokeWidth="2.1" strokeLinecap="round" />
+                        </g>
+                        <text
+                          x="88"
+                          y="102"
+                          textAnchor="middle"
+                          fontSize="9.5"
+                          fontWeight="700"
+                          letterSpacing="0.8"
+                          fontFamily="JetBrains Mono, monospace"
+                          fill="#15803d"
+                        >
+                          B 77741008 B
+                        </text>
+
+                        {/* Center Oval Engraved Portrait of Statesman Piggy-Washington */}
+                        <g transform="translate(0 -6)">
+                          <ellipse cx="0" cy="0" rx="68" ry="88" fill="#17341e" stroke="#0f2213" strokeWidth="2" />
+                          <ellipse cx="0" cy="0" rx="61" ry="81" fill="#e8ead4" stroke="#2d5736" strokeWidth="2.2" />
+                          {/* Fine banknote horizontal engraving hatch lines behind bust */}
+                          <g stroke="#2a5233" strokeWidth="0.9" opacity="0.34">
+                            <line x1="-54" y1="-50" x2="54" y2="-50" />
+                            <line x1="-58" y1="-34" x2="58" y2="-34" />
+                            <line x1="-60" y1="-18" x2="60" y2="-18" />
+                            <line x1="-60" y1="-2" x2="60" y2="-2" />
+                            <line x1="-58" y1="14" x2="58" y2="14" />
+                            <line x1="-54" y1="30" x2="54" y2="30" />
+                            <line x1="-46" y1="46" x2="46" y2="46" />
+                          </g>
+                          {/* Engraved Colonial Piggy Bust (coat lapels, cravat, pig snout & powdered wig curls!) */}
+                          <path
+                            d="M -40 66 C -34 38, -22 24, 0 24 C 22 24, 34 38, 40 66 Z"
+                            fill="#193820"
+                          />
+                          <path d="M -10 24 L 0 48 L 10 24 Z" fill="#f3f2e3" />
+                          {/* Powdered wig curls & piggy ears */}
+                          <path
+                            d="M -32 -12 C -42 -26, -30 -54, -8 -56 C -16 -68, 14 -68, 10 -56 C 32 -54, 42 -26, 32 -12 C 42 4, 34 26, 18 26 C 10 18, -10 18, -18 26 C -34 26, -42 4, -32 -12 Z"
+                            fill="#dcdcc4"
+                            stroke="#17341e"
+                            strokeWidth="2.2"
+                          />
+                          {/* Piggy Head & Classic Snout in intaglio ink */}
+                          <ellipse cx="0" cy="-16" rx="22" ry="25" fill="#e9ebd7" stroke="#17341e" strokeWidth="2.1" />
+                          <circle cx="-8" cy="-24" r="2.6" fill="#17341e" />
+                          <circle cx="8" cy="-24" r="2.6" fill="#17341e" />
+                          <ellipse cx="0" cy="-10" rx="12" ry="8.5" fill="#d5dac0" stroke="#17341e" strokeWidth="1.9" />
+                          <ellipse cx="-4.2" cy="-10" rx="2" ry="3.2" fill="#17341e" />
+                          <ellipse cx="4.2" cy="-10" rx="2" ry="3.2" fill="#17341e" />
+                          <path d="M -8 4 Q 0 10 8 4" fill="none" stroke="#17341e" strokeWidth="1.8" strokeLinecap="round" />
+
+                          {/* Sculpted Laurel Wreath Framing Portrait Bottom */}
+                          <path
+                            d="M -52 38 Q -38 72 0 76 Q 38 72 52 38"
+                            fill="none"
+                            stroke="url(#cape-gold-trim)"
+                            strokeWidth="3.2"
+                            strokeLinecap="round"
+                          />
+                          <rect x="-48" y="64" width="96" height="19" rx="4" fill="#17341e" stroke="#f0efe0" strokeWidth="1.2" />
+                          <text
+                            x="0"
+                            y="77"
+                            textAnchor="middle"
+                            fontSize="9.5"
+                            fontWeight="800"
+                            letterSpacing="1.1"
+                            fontFamily="Fraunces, Georgia, serif"
+                            fill="#f4f3e4"
+                          >
+                            PIGGYSON
+                          </text>
+                        </g>
+
+                        {/* Large Iconic Engraved "ONE DOLLAR" Banner across the lower note */}
+                        <g transform="translate(0 138)">
+                          <rect x="-112" y="-20" width="224" height="40" rx="5" fill="#1a3b22" stroke="#102515" strokeWidth="2" />
+                          <rect x="-107" y="-15" width="214" height="30" rx="3" fill="none" stroke="#dfe3cb" strokeWidth="1.1" strokeDasharray="3 2" />
+                          <text
+                            x="0"
+                            y="8"
+                            textAnchor="middle"
+                            fontSize="24"
+                            fontWeight="900"
+                            letterSpacing="2"
+                            fontFamily="Fraunces, Georgia, serif"
+                            fill="#f6f5e6"
+                            stroke="#0f2314"
+                            strokeWidth="0.9"
+                          >
+                            ONE DOLLAR
+                          </text>
+                        </g>
+                      </g>
+
+                      {/* Paper Fold Shadow Valleys & Sunlit Cotton Crease Highlights over printed artwork */}
+                      <path id="hero-cape-pleat-a" fill="url(#cape-dollar-pleat)" />
+                      <path id="hero-cape-pleat-b" fill="url(#cape-dollar-pleat)" />
+                      <path id="hero-cape-fold" fill="none" stroke="url(#cape-dollar-ridge)" strokeWidth="6.5" strokeLinecap="round" />
+                    </g>
+
+                    {/* Crisp Outer Banknote Parchment Margin & Inner Treasury Frame Edge */}
+                    <path id="hero-cape-edge-ink" fill="none" stroke="#152e1b" strokeWidth="3.2" strokeLinejoin="round" />
+                    <path id="hero-cape-trim" fill="none" stroke="#f3f1e2" strokeWidth="4.6" strokeLinecap="round" strokeLinejoin="round" opacity="0.86" />
+                    <path id="hero-cape-guilloche" fill="none" stroke="#183820" strokeWidth="1.7" strokeDasharray="4 4" strokeLinecap="round" />
+                  </g>
                   <g id="right-socket-g">
                     <ellipse cx="642" cy="235" rx="36" ry="52" transform="rotate(-26 642 235)" fill="#2c1e14" />
                   </g>
@@ -7760,6 +11229,29 @@ export function PiggyDuelPlugin({
                       <circle r="5.5" fill="#cbd5e1" />
                     </g>
                     <circle cx="552" cy="495" r="24" fill="#fef08a" stroke="#f59e0b" strokeWidth="4" opacity="0.92" />
+                  </g>
+
+                  {/* 4 Stubby Tabletop Piggy Trotters & Underside Rubber Stopper Plug (behind torso) */}
+                  <g id="piggy-bank-feet" opacity="1" style={{ pointerEvents: 'none' }}>
+                    <ellipse cx="566" cy="756" rx="38" ry="12" fill="#2c1d13" stroke="#180f09" strokeWidth="2" />
+                    <ellipse cx="566" cy="754" rx="24" ry="7" fill="#5e432d" />
+                    {[
+                      { x: 434, y: 744 },
+                      { x: 504, y: 752 },
+                      { x: 642, y: 752 },
+                      { x: 706, y: 744 },
+                    ].map((ft, fi) => (
+                      <g key={fi} transform={`translate(${ft.x} ${ft.y})`}>
+                        <path
+                          d="M -25 -28 L 25 -28 L 20 18 C 20 28 -20 28 -20 18 Z"
+                          fill="url(#piggy-ceramic-foot)"
+                          stroke="#4d1f11"
+                          strokeWidth="2.2"
+                        />
+                        <ellipse cx="0" cy="18" rx="20" ry="7" fill="#3a190e" />
+                        <ellipse cx="-7" cy="-8" rx="4.5" ry="12" fill="#fff4eb" opacity="0.34" />
+                      </g>
+                    ))}
                   </g>
 
                   <g id="torso-main">
@@ -7867,6 +11359,143 @@ export function PiggyDuelPlugin({
                       strokeLinecap="round"
                       opacity="0.3"
                     />
+                  </g>
+
+                  {/* Classic Horizontal Porcelain-Ceramic Piggybank Disguise Shell (overlays mech core & cracks outward to reveal torso-main inside!) */}
+                  <g id="piggybank-shell" opacity="1" style={{ pointerEvents: 'none' }}>
+                    {/* Lower Belly Plate */}
+                    <g id="piggy-shell-belly">
+                      <path
+                        d="M 382 650 C 425 744, 695 752, 742 644 C 712 698, 428 704, 382 650 Z"
+                        fill="url(#piggy-ceramic-belly)"
+                        stroke="#4d1f11"
+                        strokeWidth="2.4"
+                      />
+                      <path
+                        d="M 386 644 C 460 726, 668 730, 738 638 L 714 584 L 408 584 Z"
+                        fill="url(#piggy-ceramic-belly)"
+                        stroke="#4d1f11"
+                        strokeWidth="2.2"
+                      />
+                    </g>
+
+                    {/* Rear Rump & Curly Corkscrew Ceramic Piggy Tail */}
+                    <g id="piggy-shell-rear">
+                      {/* Curly Spring Piggy Tail extending horizontally out the rear */}
+                      <path
+                        d="M 762 598 C 788 594, 796 566, 780 562 C 765 558, 766 584, 792 586 C 818 588, 830 562, 816 550"
+                        fill="none"
+                        stroke="#4d1f11"
+                        strokeWidth="12"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d="M 762 598 C 788 594, 796 566, 780 562 C 765 558, 766 584, 792 586 C 818 588, 830 562, 816 550"
+                        fill="none"
+                        stroke="#f0a888"
+                        strokeWidth="7.5"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d="M 656 508 C 742 522, 792 574, 774 646 C 756 692, 696 716, 632 712 L 642 612 Z"
+                        fill="url(#piggy-ceramic-body)"
+                        stroke="#4d1f11"
+                        strokeWidth="2.6"
+                      />
+                      <path d="M 698 544 C 736 566, 754 596, 748 626" fill="none" stroke="#fff6ef" strokeWidth="6" strokeLinecap="round" opacity="0.34" />
+                    </g>
+
+                    {/* Dorsal Back Plate & Horizontal Tabletop Coin Slot */}
+                    <g id="piggy-shell-top">
+                      <path
+                        d="M 412 576 C 430 486, 678 482, 706 582 C 646 608, 470 610, 412 576 Z"
+                        fill="url(#piggy-ceramic-body)"
+                        stroke="#4d1f11"
+                        strokeWidth="2.6"
+                      />
+                      {/* Glossy Ceramic Studio Highlight across arched back */}
+                      <path
+                        d="M 456 534 C 516 506, 616 506, 668 538"
+                        fill="none"
+                        stroke="#fff8f2"
+                        strokeWidth="9"
+                        strokeLinecap="round"
+                        opacity="0.52"
+                      />
+                      {/* Horizontal Spine Coin Slot on Top of Piggybank */}
+                      <g transform="translate(558 504)">
+                        <ellipse cx="0" cy="4" rx="52" ry="13" fill="#4d1f11" opacity="0.4" />
+                        <rect x="-48" y="-8" width="96" height="16" rx="8" fill="#6b2e1b" stroke="#3a160b" strokeWidth="2.2" />
+                        <rect x="-40" y="-4" width="80" height="8" rx="4" fill="#170b06" />
+                        {/* Gleaming gold coin rim peeking slightly inside the slot */}
+                        <path d="M -22 -4 A 22 14 0 0 1 22 -4 Z" fill="#fbbf24" stroke="#78350f" strokeWidth="1.6" />
+                        <ellipse cx="-8" cy="-10" rx="10" ry="2.2" fill="#fef08a" opacity="0.7" />
+                      </g>
+                    </g>
+
+                    {/* Front Round Piggy Head, Ears, Glossy Eyes & Classic Snout */}
+                    <g id="piggy-shell-front">
+                      <path
+                        d="M 476 520 C 402 508, 344 552, 346 626 C 348 684, 410 718, 488 706 L 502 606 Z"
+                        fill="url(#piggy-ceramic-head)"
+                        stroke="#4d1f11"
+                        strokeWidth="2.6"
+                      />
+                      <g id="piggy-bank-face">
+                        {/* Floppy Sculpted Ceramic Ears */}
+                        <path
+                          d="M 402 536 C 378 476, 434 456, 456 508 C 440 524, 420 534, 402 536 Z"
+                          fill="url(#piggy-ceramic-head)"
+                          stroke="#4d1f11"
+                          strokeWidth="2.4"
+                        />
+                        <path d="M 412 524 C 402 494, 428 484, 442 510 Z" fill="#b45a3d" opacity="0.58" />
+                        <path
+                          d="M 466 516 C 464 460, 518 456, 528 506 C 508 514, 486 518, 466 516 Z"
+                          fill="url(#piggy-ceramic-head)"
+                          stroke="#4d1f11"
+                          strokeWidth="2.4"
+                        />
+                        <path d="M 476 508 C 478 480, 504 476, 512 504 Z" fill="#b45a3d" opacity="0.58" />
+
+                        {/* Cute Glossy Piggy Eyes & Rosy Cheeks */}
+                        <ellipse cx="406" cy="590" rx="11" ry="13.5" fill="#1f1109" />
+                        <circle cx="402" cy="584" r="4" fill="#FFFDF9" opacity="0.95" />
+                        <ellipse cx="458" cy="582" rx="11.5" ry="14" fill="#1f1109" />
+                        <circle cx="454" cy="576" r="4.2" fill="#FFFDF9" opacity="0.95" />
+                        <ellipse cx="442" cy="624" rx="18" ry="10" fill="#e11d48" opacity="0.22" />
+
+                        {/* Big Classic Sculpted Porcine Snout pointing Forward-Left */}
+                        <g transform="translate(342 622) rotate(-10)">
+                          <ellipse cx="5" cy="6" rx="40" ry="32" fill="#2c130a" opacity="0.28" />
+                          <ellipse cx="0" cy="0" rx="38" ry="30" fill="url(#piggy-ceramic-head)" stroke="#4d1f11" strokeWidth="2.6" />
+                          <ellipse cx="-2" cy="-6" rx="24" ry="16" fill="none" stroke="#fff6ef" strokeWidth="2" opacity="0.45" />
+                          <ellipse cx="-13" cy="0" rx="6" ry="10.5" transform="rotate(-6 -13 0)" fill="#251008" />
+                          <ellipse cx="12" cy="1" rx="6" ry="10.5" transform="rotate(6 12 1)" fill="#251008" />
+                        </g>
+                      </g>
+                    </g>
+
+                    {/* Blazing Molten-Amber Fracture Seam Glow when Carapace Cracks Open */}
+                    <g id="piggy-shell-seams" opacity="0">
+                      <path
+                        d="M 412 576 L 456 594 L 496 574 L 558 602 L 626 572 L 668 594 L 706 582 M 488 522 L 474 584 L 498 634 L 484 704 M 646 512 L 632 586 L 656 642 L 636 710"
+                        fill="none"
+                        stroke="#f59e0b"
+                        strokeWidth="12"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        filter="url(#gl-blur-m)"
+                      />
+                      <path
+                        d="M 412 576 L 456 594 L 496 574 L 558 602 L 626 572 L 668 594 L 706 582 M 488 522 L 474 584 L 498 634 L 484 704 M 646 512 L 632 586 L 656 642 L 636 710"
+                        fill="none"
+                        stroke="#fffbeb"
+                        strokeWidth="4.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </g>
                   </g>
 
                   {/* TOP SCREW: heavy machined brass Phillips bolt on hex nut, flange & threaded steel shank */}
@@ -8194,6 +11823,82 @@ export function PiggyDuelPlugin({
                     </g>
                   </g>
 
+                  {/* Tailored $1 Banknote Shoulder Mantle, Over-Shoulder Wrap & Pauldron Clasps (hugs below top screw & above coin slot) */}
+                  <g id="hero-cape-front" opacity="0" style={{ pointerEvents: 'none' }}>
+                    {/* Snug folded $1 banknote shawl collar hugging left-to-right pauldrons & wrapping behind the far shoulder */}
+                    <path
+                      d="M 326 296 C 328 272, 344 252, 376 238 C 420 220, 468 206, 520 198 C 548 188, 578 184, 608 200 C 628 212, 642 232, 646 254 C 626 244, 606 230, 582 214 C 534 224, 488 236, 446 254 C 402 272, 368 292, 344 310 Z"
+                      fill="url(#cape-dollar-main)"
+                      stroke="#162e1c"
+                      strokeWidth="2.3"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M 326 296 C 328 272, 344 252, 376 238 C 420 220, 468 206, 520 198 C 548 188, 578 184, 608 200 C 628 212, 642 232, 646 254 C 626 244, 606 230, 582 214 C 534 224, 488 236, 446 254 C 402 272, 368 292, 344 310 Z"
+                      fill="url(#cape-dollar-guilloche)"
+                    />
+                    {/* Fine intaglio note border & crease along collar edge */}
+                    <path
+                      d="M 336 294 C 344 268, 376 248, 426 230 C 476 212, 532 198, 576 196 C 600 198, 622 212, 636 238"
+                      fill="none"
+                      stroke="#183820"
+                      strokeWidth="1.9"
+                      strokeDasharray="3.2 2.4"
+                      strokeLinecap="round"
+                    />
+                    {/* Corner '1' rosette stamps integrated flush along left & right shoulder folds */}
+                    <g transform="translate(364 268) rotate(-22) scale(0.84)">
+                      <ellipse cx="0" cy="0" rx="13" ry="15" fill="#23492b" stroke="#112615" strokeWidth="1.2" />
+                      <text x="0" y="5.5" textAnchor="middle" fontSize="16" fontWeight="900" fontFamily="Fraunces, Georgia, serif" fill="#f5f4e4">
+                        1
+                      </text>
+                    </g>
+                    <g transform="translate(598 206) rotate(26) scale(0.82)">
+                      <ellipse cx="0" cy="0" rx="13" ry="15" fill="#23492b" stroke="#112615" strokeWidth="1.2" />
+                      <text x="0" y="5.5" textAnchor="middle" fontSize="16" fontWeight="900" fontFamily="Fraunces, Georgia, serif" fill="#f5f4e4">
+                        1
+                      </text>
+                    </g>
+                    {/* Snug draped gold bullion chain clear of coin slot & bolt flange */}
+                    <path
+                      d="M 342 296 C 404 282, 496 250, 572 200"
+                      fill="none"
+                      stroke="#451a03"
+                      strokeWidth="6.4"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M 342 296 C 404 282, 496 250, 572 200"
+                      fill="none"
+                      stroke="url(#cape-gold-trim)"
+                      strokeWidth="3.8"
+                      strokeDasharray="6 3.5"
+                      strokeLinecap="round"
+                    />
+                    {/* Center $1 Treasury medallion brooch neatly above coin slot rim */}
+                    <g transform="translate(450 256) rotate(-18)">
+                      <circle cx="0" cy="0" r="10.5" fill="url(#cape-emerald-seal)" stroke="url(#cape-gold-trim)" strokeWidth="2.2" />
+                      <text x="0" y="4" textAnchor="middle" fontSize="11.5" fontWeight="900" fontFamily="Fraunces, Georgia, serif" fill="#fef9c3">
+                        $1
+                      </text>
+                    </g>
+                    {/* Left & Right Pauldron-Anchored Treasury Seal Clasps */}
+                    <g transform="translate(340 296)">
+                      <circle cx="0" cy="0" r="13.5" fill="url(#cape-gold-trim)" stroke="#451a03" strokeWidth="1.8" />
+                      <circle cx="0" cy="0" r="9.5" fill="url(#cape-emerald-seal)" stroke="#fef08a" strokeWidth="1.1" />
+                      <text x="0" y="4.2" textAnchor="middle" fontSize="11.5" fontWeight="900" fontFamily="Fraunces, Georgia, serif" fill="#fef9c3">
+                        1
+                      </text>
+                    </g>
+                    <g transform="translate(572 200)">
+                      <circle cx="0" cy="0" r="13" fill="url(#cape-gold-trim)" stroke="#451a03" strokeWidth="1.8" />
+                      <circle cx="0" cy="0" r="9.2" fill="url(#cape-emerald-seal)" stroke="#fef08a" strokeWidth="1.1" />
+                      <text x="0" y="4" textAnchor="middle" fontSize="11" fontWeight="900" fontFamily="Fraunces, Georgia, serif" fill="#fef9c3">
+                        1
+                      </text>
+                    </g>
+                  </g>
+
                   <g id="jet-tuck-wrap">
                   <g id="jet-follow">
                     <g id="jet-gimbal" transform="translate(742 672) rotate(40) scale(1.4)">
@@ -8293,7 +11998,7 @@ export function PiggyDuelPlugin({
           >
             <div ref={cursorFlipRef} className="relative w-full h-full will-change-transform">
               {!spriteError ? (
-                <div className="w-full h-full overflow-hidden relative drop-shadow-[0_4px_6px_rgba(35,26,16,0.28)]">
+                <div className="w-full h-full overflow-hidden relative drop-shadow-[0_3px_8px_rgba(35,26,16,0.22)]">
                   <img
                     ref={spriteImgRef}
                     src={HAND_SPRITE_URL}
@@ -8313,7 +12018,7 @@ export function PiggyDuelPlugin({
                     style={{
                       width: `${SPRITE_COLS * 100}%`,
                       height: `${SPRITE_ROWS * 100}%`,
-                      imageRendering: 'pixelated',
+                      imageRendering: 'auto',
                     }}
                   />
                 </div>
